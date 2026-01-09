@@ -1,0 +1,73 @@
+{
+  "name": "xdrip-pebble",
+  "author": "xDrip Community",
+  "version": "1.0.0",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "xDrip BG",
+    "uuid": "95190d49-16be-4e33-b112-d14fa22fb6eb",
+    "sdkVersion": "3",
+    "enableMultiJS": false,
+    "targetPlatforms": ["aplite", "basalt", "chalk", "diorite", "emery", "flint"],
+    "watchapp": {
+      "watchface": true
+    },
+    "messageKeys": {
+      "PROTOCOL_VERSION": 0,
+      "CAPABILITIES": 1,
+      "GRAPH_HOURS": 2,
+      "TIMESTAMP": 3,
+      "BG_MGDL": 4,
+      "BG_MMOL_X10": 5,
+      "TREND_ARROW": 6,
+      "DELTA_MGDL": 7,
+      "DELTA_MMOL_X10": 8,
+      "IOB_MILLIUNITS": 9,
+      "PUMP_STATE": 10,
+      "PHONE_BATTERY": 11,
+      "PUMP_BATTERY": 12,
+      "GRAPH_DATA": 13
+    },
+    "resources": {
+      "media": [
+        {
+          "type": "png",
+          "name": "ARROW_UP_UP",
+          "file": "images/arrow_up_up.png"
+        },
+        {
+          "type": "png",
+          "name": "ARROW_UP",
+          "file": "images/arrow_up.png"
+        },
+        {
+          "type": "png",
+          "name": "ARROW_UP_RIGHT",
+          "file": "images/arrow_up_right.png"
+        },
+        {
+          "type": "png",
+          "name": "ARROW_RIGHT",
+          "file": "images/arrow_right.png"
+        },
+        {
+          "type": "png",
+          "name": "ARROW_DOWN_RIGHT",
+          "file": "images/arrow_down_right.png"
+        },
+        {
+          "type": "png",
+          "name": "ARROW_DOWN",
+          "file": "images/arrow_down.png"
+        },
+        {
+          "type": "png",
+          "name": "ARROW_DOWN_DOWN",
+          "file": "images/arrow_down_down.png"
+        }
+      ]
+    }
+  }
+}
