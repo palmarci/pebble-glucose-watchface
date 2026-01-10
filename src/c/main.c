@@ -46,7 +46,9 @@ static void update_display(void) {
     // Delta (mmol/L * 10, display with 1 decimal)
     int16_t delta_x10 = comm_get_delta_mmol_x10();
     int16_t abs_delta = delta_x10 < 0 ? -delta_x10 : delta_x10;
-    if (delta_x10 >= 0) {
+    if (delta_x10 == INT16_MAX) {
+        snprintf(s_delta_buffer, sizeof(s_delta_buffer), "---");
+    } else if (delta_x10 >= 0) {
         snprintf(s_delta_buffer, sizeof(s_delta_buffer), "+%d.%d", abs_delta / 10, abs_delta % 10);
     } else {
         snprintf(s_delta_buffer, sizeof(s_delta_buffer), "-%d.%d", abs_delta / 10, abs_delta % 10);

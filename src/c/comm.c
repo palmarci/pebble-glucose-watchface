@@ -5,7 +5,7 @@
 static uint32_t s_timestamp = 0;
 static uint16_t s_bg_mmol_x10 = 0;  // mmol/L * 10 (e.g., 7.5 = 75)
 static uint8_t s_trend_arrow = ARROW_UNKNOWN;
-static int16_t s_delta_mmol_x10 = 0;  // mmol/L * 10
+static int16_t s_delta_mmol_x10 = INT16_MAX;  // mmol/L * 10
 static bool s_has_data = false;
 
 // Callback for new data
