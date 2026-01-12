@@ -151,6 +151,8 @@ static void main_window_load(Window *window) {
 
     // Initial update
     update_time();
+    // Restore data if available (window may be reloaded while app stays alive)
+    update_display();
 }
 
 // Window unload - cleanup UI
