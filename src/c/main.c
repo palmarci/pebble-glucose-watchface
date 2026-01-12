@@ -1,6 +1,6 @@
 #include <pebble.h>
 #include "comm.h"
-#include "protocol.h"
+#include "constants.h"
 
 // UI elements
 static Window *s_main_window;
@@ -12,8 +12,6 @@ static BitmapLayer *s_arrow_layer;
 static GBitmap *s_arrow_bitmap;
 
 // Text buffers
-static char s_bg_buffer[8];
-static char s_delta_buffer[16];
 static char s_time_ago_buffer[8];
 static char s_time_buffer[8];
 
@@ -38,24 +36,13 @@ static void update_display(void) {
         return;
     }
 
-    // BG value (mmol/L * 10, display with 1 decimal)
-    uint16_t bg_x10 = comm_get_bg_mmol_x10();
-    snprintf(s_bg_buffer, sizeof(s_bg_buffer), "%d.%d", bg_x10 / 10, bg_x10 % 10);
-    text_layer_set_text(s_bg_layer, s_bg_buffer);
+    // BG value - just display the string from xDrip
+    text_layer_set_text(s_bg_layer, comm_get_bg_string());
 
-    // Delta (mmol/L * 10, display with 1 decimal)
-    int16_t delta_x10 = comm_get_delta_mmol_x10();
-    int16_t abs_delta = delta_x10 < 0 ? -delta_x10 : delta_x10;
-    if (delta_x10 == INT16_MAX) {
-        snprintf(s_delta_buffer, sizeof(s_delta_buffer), "---");
-    } else if (delta_x10 >= 0) {
-        snprintf(s_delta_buffer, sizeof(s_delta_buffer), "+%d.%d", abs_delta / 10, abs_delta % 10);
-    } else {
-        snprintf(s_delta_buffer, sizeof(s_delta_buffer), "-%d.%d", abs_delta / 10, abs_delta % 10);
-    }
-    text_layer_set_text(s_delta_layer, s_delta_buffer);
+    // Delta - just display the string from xDrip
+    text_layer_set_text(s_delta_layer, comm_get_delta_string());
 
-    // Time ago
+    // Time ago - we calculate this locally
     uint32_t timestamp = comm_get_timestamp();
     time_t now = time(NULL);
     int minutes_ago = (now - timestamp) / 60;
