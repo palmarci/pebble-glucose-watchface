@@ -48,8 +48,8 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
             s_data_callback();
         }
 
-        APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s, arrow: %d, delta: %s",
-                s_bg_string, s_trend_arrow, s_delta_string);
+        APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s, arrow: %d, delta: %s", s_bg_string,
+                s_trend_arrow, s_delta_string);
     }
 }
 
@@ -61,7 +61,8 @@ static void outbox_sent_handler(DictionaryIterator *iter, void *context) {
     APP_LOG(APP_LOG_LEVEL_DEBUG, "Message sent successfully");
 }
 
-static void outbox_failed_handler(DictionaryIterator *iter, AppMessageResult reason, void *context) {
+static void outbox_failed_handler(DictionaryIterator *iter, AppMessageResult reason,
+                                  void *context) {
     APP_LOG(APP_LOG_LEVEL_ERROR, "Message send failed: %d", reason);
 }
 
@@ -82,9 +83,7 @@ void comm_init(void) {
     APP_LOG(APP_LOG_LEVEL_INFO, "Comm initialized");
 }
 
-void comm_deinit(void) {
-    app_message_deregister_callbacks();
-}
+void comm_deinit(void) { app_message_deregister_callbacks(); }
 
 void comm_send_capabilities(void) {
     DictionaryIterator *iter;
@@ -112,26 +111,14 @@ void comm_send_capabilities(void) {
     }
 }
 
-uint32_t comm_get_timestamp(void) {
-    return s_timestamp;
-}
+uint32_t comm_get_timestamp(void) { return s_timestamp; }
 
-const char* comm_get_bg_string(void) {
-    return s_bg_string;
-}
+const char *comm_get_bg_string(void) { return s_bg_string; }
 
-uint8_t comm_get_trend_arrow(void) {
-    return s_trend_arrow;
-}
+uint8_t comm_get_trend_arrow(void) { return s_trend_arrow; }
 
-const char* comm_get_delta_string(void) {
-    return s_delta_string;
-}
+const char *comm_get_delta_string(void) { return s_delta_string; }
 
-bool comm_has_data(void) {
-    return s_has_data;
-}
+bool comm_has_data(void) { return s_has_data; }
 
-void comm_set_data_callback(CommDataCallback callback) {
-    s_data_callback = callback;
-}
+void comm_set_data_callback(CommDataCallback callback) { s_data_callback = callback; }

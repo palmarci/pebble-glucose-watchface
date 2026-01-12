@@ -1,6 +1,6 @@
-#include <pebble.h>
 #include "comm.h"
 #include "constants.h"
+#include <pebble.h>
 
 // UI elements
 static Window *s_main_window;
@@ -17,14 +17,14 @@ static char s_time_buffer[8];
 
 // Arrow resources
 static const uint32_t ARROW_RESOURCES[] = {
-    0,                          // ARROW_UNKNOWN - no image
-    RESOURCE_ID_ARROW_UP_UP,    // ARROW_DOUBLE_UP
-    RESOURCE_ID_ARROW_UP,       // ARROW_UP
-    RESOURCE_ID_ARROW_UP_RIGHT, // ARROW_UP_RIGHT
-    RESOURCE_ID_ARROW_RIGHT,    // ARROW_RIGHT
+    0,                            // ARROW_UNKNOWN - no image
+    RESOURCE_ID_ARROW_UP_UP,      // ARROW_DOUBLE_UP
+    RESOURCE_ID_ARROW_UP,         // ARROW_UP
+    RESOURCE_ID_ARROW_UP_RIGHT,   // ARROW_UP_RIGHT
+    RESOURCE_ID_ARROW_RIGHT,      // ARROW_RIGHT
     RESOURCE_ID_ARROW_DOWN_RIGHT, // ARROW_DOWN_RIGHT
-    RESOURCE_ID_ARROW_DOWN,     // ARROW_DOWN
-    RESOURCE_ID_ARROW_DOWN_DOWN // ARROW_DOUBLE_DOWN
+    RESOURCE_ID_ARROW_DOWN,       // ARROW_DOWN
+    RESOURCE_ID_ARROW_DOWN_DOWN   // ARROW_DOUBLE_DOWN
 };
 
 // Update the display with current data
@@ -68,16 +68,14 @@ static void update_display(void) {
 }
 
 // Callback when new data arrives
-static void data_received_callback(void) {
-    update_display();
-}
+static void data_received_callback(void) { update_display(); }
 
 // Update current time display
 static void update_time(void) {
     time_t now = time(NULL);
     struct tm *tick_time = localtime(&now);
-    strftime(s_time_buffer, sizeof(s_time_buffer),
-             clock_is_24h_style() ? "%H:%M" : "%I:%M", tick_time);
+    strftime(s_time_buffer, sizeof(s_time_buffer), clock_is_24h_style() ? "%H:%M" : "%I:%M",
+             tick_time);
     text_layer_set_text(s_time_layer, s_time_buffer);
 }
 
@@ -121,7 +119,8 @@ static void main_window_load(Window *window) {
 
     // Arrow - to the right of BG
     int arrow_size = 30;
-    s_arrow_layer = bitmap_layer_create(GRect(bounds.size.w - arrow_size - 10, bg_y - 15, arrow_size, arrow_size));
+    s_arrow_layer = bitmap_layer_create(
+        GRect(bounds.size.w - arrow_size - 10, bg_y - 15, arrow_size, arrow_size));
     bitmap_layer_set_compositing_mode(s_arrow_layer, GCompOpSet);
     layer_add_child(root_layer, bitmap_layer_get_layer(s_arrow_layer));
 
@@ -134,7 +133,8 @@ static void main_window_load(Window *window) {
     layer_add_child(root_layer, text_layer_get_layer(s_delta_layer));
 
     // Time ago - below BG, right side
-    s_time_ago_layer = text_layer_create(GRect(bounds.size.w / 2, bg_y + 25, bounds.size.w / 2, 24));
+    s_time_ago_layer =
+        text_layer_create(GRect(bounds.size.w / 2, bg_y + 25, bounds.size.w / 2, 24));
     text_layer_set_background_color(s_time_ago_layer, GColorClear);
     text_layer_set_text_color(s_time_ago_layer, GColorWhite);
     text_layer_set_font(s_time_ago_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24));
@@ -173,19 +173,16 @@ static void init(void) {
 
     // Create main window
     s_main_window = window_create();
-    window_set_window_handlers(s_main_window, (WindowHandlers) {
-        .load = main_window_load,
-        .unload = main_window_unload
-    });
+    window_set_window_handlers(
+        s_main_window, (WindowHandlers){.load = main_window_load, .unload = main_window_unload});
     window_stack_push(s_main_window, true);
 
     // Register tick handler
     tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
 
     // Register bluetooth handler
-    connection_service_subscribe((ConnectionHandlers) {
-        .pebble_app_connection_handler = bluetooth_callback
-    });
+    connection_service_subscribe(
+        (ConnectionHandlers){.pebble_app_connection_handler = bluetooth_callback});
 
     // Send initial capabilities
     comm_send_capabilities();
