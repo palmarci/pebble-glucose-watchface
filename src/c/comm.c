@@ -97,8 +97,8 @@ void comm_send_capabilities(void) {
     // Protocol version
     dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
 
-    // Capabilities we want (BG, trend arrow, delta)
-    dict_write_uint32(iter, KEY_CAPABILITIES, DEFAULT_CAPABILITIES);
+    // Capabilities we want
+    dict_write_uint32(iter, KEY_CAPABILITIES, CAP_BG | CAP_TREND_ARROW | CAP_DELTA);
 
     // No graph for PoC
     dict_write_uint8(iter, KEY_GRAPH_HOURS, 0);
