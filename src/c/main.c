@@ -126,8 +126,8 @@ static void main_window_load(Window *window) {
     // Delta - below BG
     s_delta_layer = text_layer_create(GRect(0, bg_y + 25, bounds.size.w / 2, 24));
     text_layer_set_background_color(s_delta_layer, GColorClear);
-    text_layer_set_text_color(s_delta_layer, GColorWhite);
-    text_layer_set_font(s_delta_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24));
+    text_layer_set_text_color(s_delta_layer, GColorBlack);
+    text_layer_set_font(s_delta_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
     text_layer_set_text_alignment(s_delta_layer, GTextAlignmentCenter);
     layer_add_child(root_layer, text_layer_get_layer(s_delta_layer));
 
@@ -135,16 +135,16 @@ static void main_window_load(Window *window) {
     s_time_ago_layer =
         text_layer_create(GRect(bounds.size.w / 2, bg_y + 25, bounds.size.w / 2, 24));
     text_layer_set_background_color(s_time_ago_layer, GColorClear);
-    text_layer_set_text_color(s_time_ago_layer, GColorWhite);
-    text_layer_set_font(s_time_ago_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24));
+    text_layer_set_text_color(s_time_ago_layer, GColorBlack);
+    text_layer_set_font(s_time_ago_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
     text_layer_set_text_alignment(s_time_ago_layer, GTextAlignmentCenter);
     layer_add_child(root_layer, text_layer_get_layer(s_time_ago_layer));
 
     // Current time - bottom
     s_time_layer = text_layer_create(GRect(0, time_y - 20, bounds.size.w, 42));
     text_layer_set_background_color(s_time_layer, GColorClear);
-    text_layer_set_text_color(s_time_layer, GColorWhite);
-    text_layer_set_font(s_time_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_LIGHT));
+    text_layer_set_text_color(s_time_layer, GColorBlack);
+    text_layer_set_font(s_time_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
     text_layer_set_text_alignment(s_time_layer, GTextAlignmentCenter);
     layer_add_child(root_layer, text_layer_get_layer(s_time_layer));
 

@@ -1,5 +1,6 @@
 #include "comm.h"
 #include "constants.h"
+#include "test_mode.h"
 
 // Buffer sizes for received strings
 #define BG_STRING_LEN 8
@@ -81,6 +82,19 @@ void comm_init(void) {
     app_message_open(inbox_size, outbox_size);
 
     APP_LOG(APP_LOG_LEVEL_INFO, "Comm initialized");
+
+#ifdef TEST_MODE
+    // Populate test data for emulator testing
+    time_t now = time(NULL);
+    s_timestamp = now - (TEST_MINUTES_AGO * 60);
+    strncpy(s_bg_string, TEST_BG_STRING, BG_STRING_LEN - 1);
+    s_bg_string[BG_STRING_LEN - 1] = '\0';
+    s_trend_arrow = TEST_ARROW_INDEX;
+    strncpy(s_delta_string, TEST_DELTA_STRING, DELTA_STRING_LEN - 1);
+    s_delta_string[DELTA_STRING_LEN - 1] = '\0';
+    s_has_data = true;
+    APP_LOG(APP_LOG_LEVEL_INFO, "Test mode: populated sample data");
+#endif
 }
 
 void comm_deinit(void) { app_message_deregister_callbacks(); }
