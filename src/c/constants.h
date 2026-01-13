@@ -18,8 +18,8 @@
 #define KEY_BG_STRING 11    // Formatted BG value, e.g. "7.5" or "135"
 #define KEY_ARROW_INDEX 12
 #define KEY_DELTA_STRING 13 // Formatted delta, e.g. "+0.3" or "-5"
-#define KEY_PHONE_BATTERY 15
-#define KEY_GRAPH_DATA 16 // Always mg/dL integers
+#define KEY_PHONE_BATTERY 14
+#define KEY_GRAPH_DATA 15 // Always mg/dL integers
 
 // Capability bits (what data the watchface wants to receive)
 #define CAP_BG (1 << 0)

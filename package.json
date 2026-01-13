@@ -25,17 +25,12 @@
       "PROTOCOL_VERSION": 0,
       "CAPABILITIES": 1,
       "GRAPH_HOURS": 2,
-      "TIMESTAMP": 3,
-      "BG_MGDL": 4,
-      "BG_MMOL_X10": 5,
-      "TREND_ARROW": 6,
-      "DELTA_MGDL": 7,
-      "DELTA_MMOL_X10": 8,
-      "IOB_MILLIUNITS": 9,
-      "PUMP_STATE": 10,
-      "PHONE_BATTERY": 11,
-      "PUMP_BATTERY": 12,
-      "GRAPH_DATA": 13
+      "BG_TIMESTAMP": 10,
+      "BG_STRING": 11,
+      "ARROW_INDEX": 12,
+      "DELTA_STRING": 13,
+      "PHONE_BATTERY": 14,
+      "GRAPH_DATA": 15
     },
     "resources": {
       "media": [
