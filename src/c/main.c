@@ -102,7 +102,7 @@ static void main_window_load(Window *window) {
     GRect bounds = layer_get_unobstructed_bounds(root_layer);
 
     // Background
-    window_set_background_color(window, GColorBlack);
+    window_set_background_color(window, GColorWhite);
 
     // Calculate positions - simple centered layout
     int bg_y = bounds.size.h / 4;
@@ -111,10 +111,9 @@ static void main_window_load(Window *window) {
     // BG value - large, centered
     s_bg_layer = text_layer_create(GRect(0, bg_y - 30, bounds.size.w, 50));
     text_layer_set_background_color(s_bg_layer, GColorClear);
-    text_layer_set_text_color(s_bg_layer, GColorWhite);
+    text_layer_set_text_color(s_bg_layer, GColorBlack);
     text_layer_set_font(s_bg_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
     text_layer_set_text_alignment(s_bg_layer, GTextAlignmentCenter);
-    text_layer_set_text(s_bg_layer, "---");
     layer_add_child(root_layer, text_layer_get_layer(s_bg_layer));
 
     // Arrow - to the right of BG
