@@ -4,7 +4,7 @@
 
 // Layout elements
 static Window *s_main_window;
-static Layer *s_bottom_bg_layer;
+static TextLayer *s_bottom_bg_layer;
 static TextLayer *s_bg_layer;
 static TextLayer *s_delta_layer;
 static TextLayer *s_time_ago_layer;
@@ -29,12 +29,6 @@ static const uint32_t ARROW_RESOURCES[] = {
     RESOURCE_ID_ARROW_DOWN,       // ARROW_DOWN
     RESOURCE_ID_ARROW_DOWN_DOWN   // ARROW_DOUBLE_DOWN
 };
-
-// Draw black background for bottom half
-static void bottom_bg_update_proc(Layer *layer, GContext *ctx) {
-    graphics_context_set_fill_color(ctx, GColorBlack);
-    graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
-}
 
 // Update the display with current data
 static void update_display(void) {
@@ -120,9 +114,10 @@ static void main_window_load(Window *window) {
     int time_y = bounds.size.h * 3 / 4;
 
     // Black background for bottom half
-    s_bottom_bg_layer = layer_create(GRect(0, bounds.size.h / 2, bounds.size.w, bounds.size.h / 2));
-    layer_set_update_proc(s_bottom_bg_layer, bottom_bg_update_proc);
-    layer_add_child(root_layer, s_bottom_bg_layer);
+    // This layer is not for text, but TextLayer allows setting background color
+    s_bottom_bg_layer = text_layer_create(GRect(0, bounds.size.h / 2, bounds.size.w, bounds.size.h / 2));
+    text_layer_set_background_color(s_bottom_bg_layer, GColorBlack);
+    layer_add_child(root_layer, text_layer_get_layer(s_bottom_bg_layer));
 
     // BG value - large, centered
     s_bg_layer = text_layer_create(GRect(0, -5, 95, 47));
@@ -177,7 +172,7 @@ static void main_window_load(Window *window) {
 
 // Window unload - cleanup UI
 static void main_window_unload(Window *window) {
-    layer_destroy(s_bottom_bg_layer);
+    text_layer_destroy(s_bottom_bg_layer);
     text_layer_destroy(s_bg_layer);
     text_layer_destroy(s_delta_layer);
     text_layer_destroy(s_time_ago_layer);
