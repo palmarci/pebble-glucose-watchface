@@ -30,25 +30,25 @@ static const uint32_t ARROW_RESOURCES[] = {
     RESOURCE_ID_ARROW_DOWN_DOWN   // ARROW_DOUBLE_DOWN
 };
 
-// Update the display with current data
-static void update_display(void) {
+// Update displayed BG data
+static void update_bg_data(void) {
     if (!comm_has_data()) {
         text_layer_set_text(s_bg_layer, "---");
-        text_layer_set_text(s_delta_layer, "");
-        text_layer_set_text(s_time_ago_layer, "");
+        text_layer_set_text(s_delta_layer, "---");
+        text_layer_set_text(s_time_ago_layer, "---");
         return;
     }
 
-    // BG value - just display the string from xDrip
+    // BG value
     text_layer_set_text(s_bg_layer, comm_get_bg_string());
 
-    // Delta - just display the string from xDrip
+    // Delta value
     text_layer_set_text(s_delta_layer, comm_get_delta_string());
 
-    // Time ago - we calculate this locally
+    // Time ago
     uint32_t timestamp = comm_get_timestamp();
     time_t now = time(NULL);
-    int minutes_ago = (now - timestamp) / 60;
+    const int minutes_ago = (now - timestamp) / 60;
     if (minutes_ago < 60) {
         snprintf(s_time_ago_buffer, sizeof(s_time_ago_buffer), "%dm", minutes_ago);
     } else {
@@ -56,25 +56,22 @@ static void update_display(void) {
     }
     text_layer_set_text(s_time_ago_layer, s_time_ago_buffer);
 
-    // Arrow
-    uint8_t arrow = comm_get_trend_arrow();
+    // Trend arrow
+    const uint8_t arrow_index = comm_get_arrow_index();
     if (s_arrow_bitmap) {
         gbitmap_destroy(s_arrow_bitmap);
         s_arrow_bitmap = NULL;
     }
-    if (arrow > 0 && arrow < sizeof(ARROW_RESOURCES) / sizeof(ARROW_RESOURCES[0])) {
-        s_arrow_bitmap = gbitmap_create_with_resource(ARROW_RESOURCES[arrow]);
+    if (arrow_index > 0 && arrow_index < sizeof(ARROW_RESOURCES) / sizeof(ARROW_RESOURCES[0])) {
+        s_arrow_bitmap = gbitmap_create_with_resource(ARROW_RESOURCES[arrow_index]);
         bitmap_layer_set_bitmap(s_arrow_layer, s_arrow_bitmap);
     } else {
         bitmap_layer_set_bitmap(s_arrow_layer, NULL);
     }
 }
 
-// Callback when new data arrives
-static void data_received_callback(void) { update_display(); }
-
-// Update current time display
-static void update_time(void) {
+// Update displayed time and date
+static void update_time_and_date(void) {
     time_t now = time(NULL);
     struct tm *tick_time = localtime(&now);
     strftime(s_time_buffer, sizeof(s_time_buffer), clock_is_24h_style() ? "%H:%M" : "%I:%M",
@@ -84,42 +81,37 @@ static void update_time(void) {
     text_layer_set_text(s_date_layer, s_date_buffer);
 }
 
-// Tick handler - called every minute
-static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
-    update_time();
+// Called every minute
+static void minute_tick_handler(struct tm *tick_time, TimeUnits units_changed) {
+    update_time_and_date();
     // Only update display if we have data (don't overwrite with "---")
     if (comm_has_data()) {
-        update_display();
+        update_bg_data();
     }
 }
 
-// Bluetooth connection handler
+// Bluetooth connection handler - only called on transitions
 static void bluetooth_callback(bool connected) {
+    // Re-send capabilities on reconnect
     if (connected) {
-        // Re-send capabilities on reconnect
         comm_send_capabilities();
     }
 }
 
-// Window load - create UI
+// Define graphical layout
 static void main_window_load(Window *window) {
     Layer *root_layer = window_get_root_layer(window);
-    GRect bounds = layer_get_unobstructed_bounds(root_layer);
 
     // Background
     window_set_background_color(window, GColorWhite);
 
-    // Calculate positions - simple centered layout
-    int bg_y = bounds.size.h / 4;
-    int time_y = bounds.size.h * 3 / 4;
-
     // Black background for bottom half
     // This layer is not for text, but TextLayer allows setting background color
-    s_bottom_bg_layer = text_layer_create(GRect(0, bounds.size.h / 2, bounds.size.w, bounds.size.h / 2));
+    s_bottom_bg_layer = text_layer_create(GRect(0, PBL_DISPLAY_HEIGHT / 2, PBL_DISPLAY_WIDTH, PBL_DISPLAY_HEIGHT / 2));
     text_layer_set_background_color(s_bottom_bg_layer, GColorBlack);
     layer_add_child(root_layer, text_layer_get_layer(s_bottom_bg_layer));
 
-    // BG value - large, centered
+    // BG value - top left
     s_bg_layer = text_layer_create(GRect(0, -5, 95, 47));
     text_layer_set_background_color(s_bg_layer, GColorClear);
     text_layer_set_text_color(s_bg_layer, GColorBlack);
@@ -127,12 +119,12 @@ static void main_window_load(Window *window) {
     text_layer_set_text_alignment(s_bg_layer, GTextAlignmentCenter);
     layer_add_child(root_layer, text_layer_get_layer(s_bg_layer));
 
-    // Arrow - to the right of BG
+    // Arrow - top right
     s_arrow_layer = bitmap_layer_create(GRect(85, -7, 78, 51));
     bitmap_layer_set_compositing_mode(s_arrow_layer, GCompOpSet);
     layer_add_child(root_layer, bitmap_layer_get_layer(s_arrow_layer));
 
-    // Delta - below BG
+    // Delta - below arrow
     s_delta_layer = text_layer_create(GRect(0, 36, 143, 50));
     text_layer_set_background_color(s_delta_layer, GColorClear);
     text_layer_set_text_color(s_delta_layer, GColorBlack);
@@ -140,7 +132,7 @@ static void main_window_load(Window *window) {
     text_layer_set_text_alignment(s_delta_layer, GTextAlignmentRight);
     layer_add_child(root_layer, text_layer_get_layer(s_delta_layer));
 
-    // Time ago - below BG, right side
+    // Time ago - below delta
     s_time_ago_layer = text_layer_create(GRect(104, 58, 40, 24));
     text_layer_set_background_color(s_time_ago_layer, GColorClear);
     text_layer_set_text_color(s_time_ago_layer, GColorBlack);
@@ -148,7 +140,7 @@ static void main_window_load(Window *window) {
     text_layer_set_text_alignment(s_time_ago_layer, GTextAlignmentCenter);
     layer_add_child(root_layer, text_layer_get_layer(s_time_ago_layer));
 
-    // Current time - bottom
+    // Current time - bottom center
     s_time_layer = text_layer_create(GRect(0, 82, 143, 44));
     text_layer_set_background_color(s_time_layer, GColorClear);
     text_layer_set_text_color(s_time_layer, GColorWhite);
@@ -165,9 +157,8 @@ static void main_window_load(Window *window) {
     layer_add_child(root_layer, text_layer_get_layer(s_date_layer));
 
     // Initial update
-    update_time();
-    // Restore data if available (window may be reloaded while app stays alive)
-    update_display();
+    update_bg_data();
+    update_time_and_date();
 }
 
 // Window unload - cleanup UI
@@ -188,7 +179,7 @@ static void main_window_unload(Window *window) {
 static void init(void) {
     // Initialize communication
     comm_init();
-    comm_set_data_callback(data_received_callback);
+    comm_set_data_callback(update_bg_data);
 
     // Create main window
     s_main_window = window_create();
@@ -196,8 +187,8 @@ static void init(void) {
         s_main_window, (WindowHandlers){.load = main_window_load, .unload = main_window_unload});
     window_stack_push(s_main_window, true);
 
-    // Register tick handler
-    tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
+    // Register minute tick handler
+    tick_timer_service_subscribe(MINUTE_UNIT, minute_tick_handler);
 
     // Register bluetooth handler
     connection_service_subscribe(

@@ -129,7 +129,7 @@ uint32_t comm_get_timestamp(void) { return s_timestamp; }
 
 const char *comm_get_bg_string(void) { return s_bg_string; }
 
-uint8_t comm_get_trend_arrow(void) { return s_trend_arrow; }
+uint8_t comm_get_arrow_index(void) { return s_trend_arrow; }
 
 const char *comm_get_delta_string(void) { return s_delta_string; }
 
