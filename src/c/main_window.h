@@ -1,5 +1,7 @@
 #pragma once
 
+#include <pebble.h>
+
 /**
  * Main window - displays BG data, trend arrow, delta, and time.
  */
@@ -25,3 +27,5 @@ void main_window_update_bg_data(void);
  * Called by main.c on tick events.
  */
 void main_window_update_time(void);
+
+void main_window_battery_handler(BatteryChargeState charge_state);

@@ -4,20 +4,22 @@
 #include <pebble.h>
 
 // Layout elements
-static Window *s_main_window;
-static TextLayer *s_bottom_bg_layer;
-static TextLayer *s_bg_layer;
-static TextLayer *s_delta_layer;
-static TextLayer *s_time_ago_layer;
-static TextLayer *s_time_layer;
-static TextLayer *s_date_layer;
-static BitmapLayer *s_arrow_layer;
-static GBitmap *s_arrow_bitmap;
+static Window *s_main_window = NULL;
+static TextLayer *s_bottom_bg_layer = NULL;
+static TextLayer *s_bg_layer = NULL;
+static TextLayer *s_delta_layer = NULL;
+static TextLayer *s_time_ago_layer = NULL;
+static TextLayer *s_time_layer = NULL;
+static TextLayer *s_date_layer = NULL;
+static BitmapLayer *s_arrow_layer = NULL;
+static GBitmap *s_arrow_bitmap = NULL;
+static TextLayer *s_watch_battery_layer = NULL;
 
 // Text buffers
 static char s_time_ago_buffer[8];
 static char s_time_buffer[8];
 static char s_date_buffer[16];
+static char s_watch_battery_buffer[9];
 
 // Arrow resources
 static const uint32_t ARROW_RESOURCES[] = {
@@ -82,6 +84,11 @@ static void update_time_and_date(void) {
     text_layer_set_text(s_date_layer, s_date_buffer);
 }
 
+void main_window_battery_handler(BatteryChargeState charge_state) {
+    snprintf(s_watch_battery_buffer, 9, "W:%i%%", charge_state.charge_percent);
+    text_layer_set_text(s_watch_battery_layer, s_watch_battery_buffer);
+}
+
 // Window load - create UI
 static void window_load(Window *window) {
     Layer *root_layer = window_get_root_layer(window);
@@ -141,9 +148,18 @@ static void window_load(Window *window) {
     text_layer_set_text_alignment(s_date_layer, GTextAlignmentCenter);
     layer_add_child(root_layer, text_layer_get_layer(s_date_layer));
 
+    // Watch battery - bottom right
+    s_watch_battery_layer = text_layer_create(GRect(81, 148, 59, 18));
+    text_layer_set_background_color(s_watch_battery_layer, GColorClear);
+    text_layer_set_text_color(s_watch_battery_layer, GColorWhite);
+    text_layer_set_font(s_watch_battery_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+    text_layer_set_text_alignment(s_watch_battery_layer, GTextAlignmentRight);
+    layer_add_child(root_layer, text_layer_get_layer(s_watch_battery_layer));
+
     // Initial update
     update_time_and_date();
     update_bg_data();
+    main_window_battery_handler(battery_state_service_peek());
 }
 
 // Window unload - cleanup UI
@@ -154,6 +170,7 @@ static void window_unload(Window *window) {
     text_layer_destroy(s_time_ago_layer);
     text_layer_destroy(s_time_layer);
     text_layer_destroy(s_date_layer);
+    text_layer_destroy(s_watch_battery_layer);
     bitmap_layer_destroy(s_arrow_layer);
     if (s_arrow_bitmap) {
         gbitmap_destroy(s_arrow_bitmap);
