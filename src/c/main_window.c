@@ -71,9 +71,6 @@ static void update_display(void) {
     }
 }
 
-// Callback when new data arrives
-static void data_received_callback(void) { update_display(); }
-
 // Update current time display
 static void update_time(void) {
     time_t now = time(NULL);
@@ -83,23 +80,6 @@ static void update_time(void) {
     text_layer_set_text(s_time_layer, s_time_buffer);
     strftime(s_date_buffer, sizeof(s_date_buffer), "%a %d %b", tick_time);
     text_layer_set_text(s_date_layer, s_date_buffer);
-}
-
-// Tick handler - called every minute
-static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
-    update_time();
-    // Only update display if we have data (don't overwrite with "---")
-    if (comm_has_data()) {
-        update_display();
-    }
-}
-
-// Bluetooth connection handler
-static void bluetooth_callback(bool connected) {
-    if (connected) {
-        // Re-send capabilities on reconnect
-        comm_send_capabilities();
-    }
 }
 
 // Window load - create UI
@@ -180,31 +160,21 @@ static void window_unload(Window *window) {
     }
 }
 
-void main_window_push(void) {
-    // Initialize communication
-    comm_init();
-    comm_set_data_callback(data_received_callback);
-
-    // Create main window
+void main_window_create(void) {
     s_main_window = window_create();
     window_set_window_handlers(
         s_main_window, (WindowHandlers){.load = window_load, .unload = window_unload});
     window_stack_push(s_main_window, true);
-
-    // Register tick handler
-    tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
-
-    // Register bluetooth handler
-    connection_service_subscribe(
-        (ConnectionHandlers){.pebble_app_connection_handler = bluetooth_callback});
-
-    // Send initial capabilities
-    comm_send_capabilities();
 }
 
-void main_window_destroy(void) {
-    tick_timer_service_unsubscribe();
-    connection_service_unsubscribe();
-    comm_deinit();
-    window_destroy(s_main_window);
+void main_window_destroy(void) { window_destroy(s_main_window); }
+
+void main_window_update_bg_data(void) { update_display(); }
+
+void main_window_update_time(void) {
+    update_time();
+    // Also update BG data time-ago if we have data
+    if (comm_has_data()) {
+        update_display();
+    }
 }
