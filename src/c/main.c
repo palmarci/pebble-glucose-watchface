@@ -8,12 +8,14 @@ static TextLayer *s_bg_layer;
 static TextLayer *s_delta_layer;
 static TextLayer *s_time_ago_layer;
 static TextLayer *s_time_layer;
+static TextLayer *s_date_layer;
 static BitmapLayer *s_arrow_layer;
 static GBitmap *s_arrow_bitmap;
 
 // Text buffers
 static char s_time_ago_buffer[8];
 static char s_time_buffer[8];
+static char s_date_buffer[16];
 
 // Arrow resources
 static const uint32_t ARROW_RESOURCES[] = {
@@ -77,6 +79,8 @@ static void update_time(void) {
     strftime(s_time_buffer, sizeof(s_time_buffer), clock_is_24h_style() ? "%H:%M" : "%I:%M",
              tick_time);
     text_layer_set_text(s_time_layer, s_time_buffer);
+    strftime(s_date_buffer, sizeof(s_date_buffer), "%a %d %b", tick_time);
+    text_layer_set_text(s_date_layer, s_date_buffer);
 }
 
 // Tick handler - called every minute
@@ -141,12 +145,20 @@ static void main_window_load(Window *window) {
     layer_add_child(root_layer, text_layer_get_layer(s_time_ago_layer));
 
     // Current time - bottom
-    s_time_layer = text_layer_create(GRect(0, time_y - 20, bounds.size.w, 42));
+    s_time_layer = text_layer_create(GRect(0, time_y - 40, bounds.size.w, 42));
     text_layer_set_background_color(s_time_layer, GColorClear);
     text_layer_set_text_color(s_time_layer, GColorBlack);
     text_layer_set_font(s_time_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
     text_layer_set_text_alignment(s_time_layer, GTextAlignmentCenter);
     layer_add_child(root_layer, text_layer_get_layer(s_time_layer));
+
+    // Date - below time
+    s_date_layer = text_layer_create(GRect(0, time_y + 10, bounds.size.w, 24));
+    text_layer_set_background_color(s_date_layer, GColorClear);
+    text_layer_set_text_color(s_date_layer, GColorBlack);
+    text_layer_set_font(s_date_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+    text_layer_set_text_alignment(s_date_layer, GTextAlignmentCenter);
+    layer_add_child(root_layer, text_layer_get_layer(s_date_layer));
 
     // Initial update
     update_time();
@@ -160,6 +172,7 @@ static void main_window_unload(Window *window) {
     text_layer_destroy(s_delta_layer);
     text_layer_destroy(s_time_ago_layer);
     text_layer_destroy(s_time_layer);
+    text_layer_destroy(s_date_layer);
     bitmap_layer_destroy(s_arrow_layer);
     if (s_arrow_bitmap) {
         gbitmap_destroy(s_arrow_bitmap);
