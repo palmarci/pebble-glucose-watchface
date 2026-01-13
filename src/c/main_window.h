@@ -2,9 +2,6 @@
 
 /**
  * Main window - displays BG data, trend arrow, delta, and time.
- *
- * This module is responsible ONLY for UI/layout.
- * It does not handle any app-level services (comm, timers, etc).
  */
 
 /**

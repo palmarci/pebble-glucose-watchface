@@ -3,7 +3,7 @@
 #include "constants.h"
 #include <pebble.h>
 
-// UI elements
+// Layout elements
 static Window *s_main_window;
 static TextLayer *s_bottom_bg_layer;
 static TextLayer *s_bg_layer;
@@ -31,12 +31,12 @@ static const uint32_t ARROW_RESOURCES[] = {
     RESOURCE_ID_ARROW_DOWN_DOWN   // ARROW_DOUBLE_DOWN
 };
 
-// Update the display with current data
-static void update_display(void) {
+// Update the display with current BG data
+static void update_bg_data(void) {
     if (!comm_has_data()) {
         text_layer_set_text(s_bg_layer, "---");
-        text_layer_set_text(s_delta_layer, "");
-        text_layer_set_text(s_time_ago_layer, "");
+        text_layer_set_text(s_delta_layer, "---");
+        text_layer_set_text(s_time_ago_layer, "---");
         return;
     }
 
@@ -58,13 +58,13 @@ static void update_display(void) {
     text_layer_set_text(s_time_ago_layer, s_time_ago_buffer);
 
     // Arrow
-    uint8_t arrow = comm_get_arrow_index();
+    uint8_t arrow_index = comm_get_arrow_index();
     if (s_arrow_bitmap) {
         gbitmap_destroy(s_arrow_bitmap);
         s_arrow_bitmap = NULL;
     }
-    if (arrow > 0 && arrow < sizeof(ARROW_RESOURCES) / sizeof(ARROW_RESOURCES[0])) {
-        s_arrow_bitmap = gbitmap_create_with_resource(ARROW_RESOURCES[arrow]);
+    if (arrow_index > 0 && arrow_index < sizeof(ARROW_RESOURCES) / sizeof(ARROW_RESOURCES[0])) {
+        s_arrow_bitmap = gbitmap_create_with_resource(ARROW_RESOURCES[arrow_index]);
         bitmap_layer_set_bitmap(s_arrow_layer, s_arrow_bitmap);
     } else {
         bitmap_layer_set_bitmap(s_arrow_layer, NULL);
@@ -72,7 +72,7 @@ static void update_display(void) {
 }
 
 // Update current time display
-static void update_time(void) {
+static void update_time_and_date(void) {
     time_t now = time(NULL);
     struct tm *tick_time = localtime(&now);
     strftime(s_time_buffer, sizeof(s_time_buffer), clock_is_24h_style() ? "%H:%M" : "%I:%M",
@@ -91,7 +91,8 @@ static void window_load(Window *window) {
     window_set_background_color(window, GColorWhite);
 
     // Black background for bottom half (TextLayer used purely for its background color)
-    s_bottom_bg_layer = text_layer_create(GRect(0, bounds.size.h / 2, bounds.size.w, bounds.size.h / 2));
+    s_bottom_bg_layer =
+        text_layer_create(GRect(0, bounds.size.h / 2, bounds.size.w, bounds.size.h / 2));
     text_layer_set_background_color(s_bottom_bg_layer, GColorBlack);
     layer_add_child(root_layer, text_layer_get_layer(s_bottom_bg_layer));
 
@@ -141,9 +142,8 @@ static void window_load(Window *window) {
     layer_add_child(root_layer, text_layer_get_layer(s_date_layer));
 
     // Initial update
-    update_time();
-    // Restore data if available (window may be reloaded while app stays alive)
-    update_display();
+    update_time_and_date();
+    update_bg_data();
 }
 
 // Window unload - cleanup UI
@@ -162,19 +162,20 @@ static void window_unload(Window *window) {
 
 void main_window_create(void) {
     s_main_window = window_create();
-    window_set_window_handlers(
-        s_main_window, (WindowHandlers){.load = window_load, .unload = window_unload});
+    window_set_window_handlers(s_main_window,
+                               (WindowHandlers){.load = window_load, .unload = window_unload});
     window_stack_push(s_main_window, true);
 }
 
 void main_window_destroy(void) { window_destroy(s_main_window); }
 
-void main_window_update_bg_data(void) { update_display(); }
+void main_window_update_bg_data(void) { update_bg_data(); }
 
 void main_window_update_time(void) {
-    update_time();
+    update_time_and_date();
+
     // Also update BG data time-ago if we have data
     if (comm_has_data()) {
-        update_display();
+        update_bg_data();
     }
 }
