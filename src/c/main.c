@@ -2,8 +2,9 @@
 #include "constants.h"
 #include <pebble.h>
 
-// UI elements
+// Layout elements
 static Window *s_main_window;
+static Layer *s_bottom_bg_layer;
 static TextLayer *s_bg_layer;
 static TextLayer *s_delta_layer;
 static TextLayer *s_time_ago_layer;
@@ -28,6 +29,12 @@ static const uint32_t ARROW_RESOURCES[] = {
     RESOURCE_ID_ARROW_DOWN,       // ARROW_DOWN
     RESOURCE_ID_ARROW_DOWN_DOWN   // ARROW_DOUBLE_DOWN
 };
+
+// Draw black background for bottom half
+static void bottom_bg_update_proc(Layer *layer, GContext *ctx) {
+    graphics_context_set_fill_color(ctx, GColorBlack);
+    graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
+}
 
 // Update the display with current data
 static void update_display(void) {
@@ -112,8 +119,13 @@ static void main_window_load(Window *window) {
     int bg_y = bounds.size.h / 4;
     int time_y = bounds.size.h * 3 / 4;
 
+    // Black background for bottom half
+    s_bottom_bg_layer = layer_create(GRect(0, bounds.size.h / 2, bounds.size.w, bounds.size.h / 2));
+    layer_set_update_proc(s_bottom_bg_layer, bottom_bg_update_proc);
+    layer_add_child(root_layer, s_bottom_bg_layer);
+
     // BG value - large, centered
-    s_bg_layer = text_layer_create(GRect(0, bg_y - 30, bounds.size.w, 50));
+    s_bg_layer = text_layer_create(GRect(0, -5, 95, 47));
     text_layer_set_background_color(s_bg_layer, GColorClear);
     text_layer_set_text_color(s_bg_layer, GColorBlack);
     text_layer_set_font(s_bg_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
@@ -121,23 +133,20 @@ static void main_window_load(Window *window) {
     layer_add_child(root_layer, text_layer_get_layer(s_bg_layer));
 
     // Arrow - to the right of BG
-    int arrow_size = 30;
-    s_arrow_layer = bitmap_layer_create(
-        GRect(bounds.size.w - arrow_size - 10, bg_y - 15, arrow_size, arrow_size));
+    s_arrow_layer = bitmap_layer_create(GRect(85, -7, 78, 51));
     bitmap_layer_set_compositing_mode(s_arrow_layer, GCompOpSet);
     layer_add_child(root_layer, bitmap_layer_get_layer(s_arrow_layer));
 
     // Delta - below BG
-    s_delta_layer = text_layer_create(GRect(0, bg_y + 25, bounds.size.w / 2, 24));
+    s_delta_layer = text_layer_create(GRect(0, 36, 143, 50));
     text_layer_set_background_color(s_delta_layer, GColorClear);
     text_layer_set_text_color(s_delta_layer, GColorBlack);
-    text_layer_set_font(s_delta_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
-    text_layer_set_text_alignment(s_delta_layer, GTextAlignmentCenter);
+    text_layer_set_font(s_delta_layer, fonts_get_system_font(FONT_KEY_GOTHIC_28));
+    text_layer_set_text_alignment(s_delta_layer, GTextAlignmentRight);
     layer_add_child(root_layer, text_layer_get_layer(s_delta_layer));
 
     // Time ago - below BG, right side
-    s_time_ago_layer =
-        text_layer_create(GRect(bounds.size.w / 2, bg_y + 25, bounds.size.w / 2, 24));
+    s_time_ago_layer = text_layer_create(GRect(104, 58, 40, 24));
     text_layer_set_background_color(s_time_ago_layer, GColorClear);
     text_layer_set_text_color(s_time_ago_layer, GColorBlack);
     text_layer_set_font(s_time_ago_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
@@ -145,17 +154,17 @@ static void main_window_load(Window *window) {
     layer_add_child(root_layer, text_layer_get_layer(s_time_ago_layer));
 
     // Current time - bottom
-    s_time_layer = text_layer_create(GRect(0, time_y - 40, bounds.size.w, 42));
+    s_time_layer = text_layer_create(GRect(0, 82, 143, 44));
     text_layer_set_background_color(s_time_layer, GColorClear);
-    text_layer_set_text_color(s_time_layer, GColorBlack);
+    text_layer_set_text_color(s_time_layer, GColorWhite);
     text_layer_set_font(s_time_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
     text_layer_set_text_alignment(s_time_layer, GTextAlignmentCenter);
     layer_add_child(root_layer, text_layer_get_layer(s_time_layer));
 
     // Date - below time
-    s_date_layer = text_layer_create(GRect(0, time_y + 10, bounds.size.w, 24));
+    s_date_layer = text_layer_create(GRect(0, 120, 143, 29));
     text_layer_set_background_color(s_date_layer, GColorClear);
-    text_layer_set_text_color(s_date_layer, GColorBlack);
+    text_layer_set_text_color(s_date_layer, GColorWhite);
     text_layer_set_font(s_date_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
     text_layer_set_text_alignment(s_date_layer, GTextAlignmentCenter);
     layer_add_child(root_layer, text_layer_get_layer(s_date_layer));
@@ -168,6 +177,7 @@ static void main_window_load(Window *window) {
 
 // Window unload - cleanup UI
 static void main_window_unload(Window *window) {
+    layer_destroy(s_bottom_bg_layer);
     text_layer_destroy(s_bg_layer);
     text_layer_destroy(s_delta_layer);
     text_layer_destroy(s_time_ago_layer);
