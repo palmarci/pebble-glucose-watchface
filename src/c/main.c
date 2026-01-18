@@ -1,51 +1,27 @@
-/**
- * xDrip Pebble Watchface
- *
- * Displays blood glucose data from xDrip+ Android app.
- * Watchface announces its capabilities to xDrip, xDrip then sends that data back.
- *
- * This file handles app-level services (communication, timers, bluetooth).
- * UI/layout is in main_window.c.
- */
+// xDrip Pebble reference watchface
+//
+// This is a simple watchface created to serve as a reference for the new xDrip-Pebble communication
+// protocol. It displays blood glucose, BG delta, time ago, trend arrow, and BG graph, in addition
+// to the time and date.
+//
+// TODO see x for info about the protocol
 
-
-// TODO explain that we try to minimize redirecttion
-// TODO test mode should axctually be sep file, but explain why inside it
-
+#include "test_mode.h"
 #include <pebble.h>
 
-/**
- * Test mode for emulator testing.
- * Uncomment TEST_MODE to enable sample data.
- */
+#define PROTOCOL_VERSION 1 // Bump for breaking protocol changes
 
-#define TEST_MODE
-
-#define TEST_BG_STRING "100"
-#define TEST_DELTA_STRING "+0.08"
-#define TEST_MINUTES_AGO 59
-#define TEST_ARROW_INDEX (time(NULL) % 8)
-
-
-/**
- * xDrip-Pebble Protocol constants.
- * Keys must match the Android/xDrip side.
- */
-
-// Bump this for breaking changes
-#define PROTOCOL_VERSION 1
-
-// Message keys for capability announcement (Pebble -> xDrip)
+// Message keys: Pebble -> xDrip capability announcement
 #define KEY_PROTOCOL_VERSION 0
 #define KEY_CAPABILITIES 1
 #define KEY_GRAPH_HOURS 2
 
-// Message keys for watchface data (xDrip -> Pebble)
+// Message keys: xDrip -> Pebble watchface data
 #define KEY_BG_TIMESTAMP 10 // UNIX epoch time [seconds]
 #define KEY_BG_STRING 11    // Formatted BG value, e.g. "7.5" or "135"
 #define KEY_ARROW_INDEX 12
 #define KEY_DELTA_STRING 13 // Formatted delta, e.g. "+0.3" or "-5"
-#define KEY_GRAPH_DATA 15 // Always mg/dL integers
+#define KEY_GRAPH_DATA 15   // Always mg/dL integers
 
 // Capability bits (what data the watchface wants to receive)
 #define CAP_BG (1 << 0)
@@ -53,7 +29,7 @@
 #define CAP_DELTA (1 << 2)
 #define CAP_GRAPH (1 << 5)
 
-// Trend arrow values
+// Trend arrow indices
 #define ARROW_UNKNOWN 0
 #define ARROW_DOUBLE_UP 1
 #define ARROW_UP 2
@@ -63,15 +39,8 @@
 #define ARROW_DOWN 6
 #define ARROW_DOUBLE_DOWN 7
 
-
-
-// Buffer sizes for received strings
-#define BG_STRING_LEN 8
-#define DELTA_STRING_LEN 8
-
 // Layout elements
-static Window *s_main_window = NULL;
-static TextLayer *s_bottom_bg_layer = NULL;
+static Window *s_window = NULL;
 static TextLayer *s_bg_layer = NULL;
 static TextLayer *s_delta_layer = NULL;
 static TextLayer *s_time_ago_layer = NULL;
@@ -80,12 +49,19 @@ static TextLayer *s_date_layer = NULL;
 static BitmapLayer *s_arrow_layer = NULL;
 static GBitmap *s_arrow_bitmap = NULL;
 
-// Text buffers
-static char s_time_ago_buffer[4];   // Fits '59m'
-static char s_time_buffer[6];       // Fits '20:23'
-static char s_date_buffer[11];      // Fits 'Tue 13 Jan'
+// TODO make a struct?
+// Watchface data
+static bool s_has_data = false;  // TODO clarify that this is just "we have ever received data"
+static uint32_t s_timestamp = 0; // TODO "BG timestamp"?
+static char s_bg_string[8] = "";
+static uint8_t s_trend_arrow = ARROW_UNKNOWN;
+static char s_delta_string[8] = "";
+static char s_time_ago_buffer[4]; // Fits '59m'
+static char s_time_buffer[6];     // Fits '20:23'
+static char s_date_buffer[11];    // Fits 'Tue 13 Jan'
 
 // Arrow resources
+// TODO must we do it this way? seems so verbose for nothing
 static const uint32_t ARROW_RESOURCES[] = {
     0,                            // ARROW_UNKNOWN - no image
     RESOURCE_ID_ARROW_UP_UP,      // ARROW_DOUBLE_UP
@@ -97,19 +73,19 @@ static const uint32_t ARROW_RESOURCES[] = {
     RESOURCE_ID_ARROW_DOWN_DOWN   // ARROW_DOUBLE_DOWN
 };
 
+// Helper functions
 
-// Stored data from last received message
-// Todo make a struct?
-static uint32_t s_timestamp = 0;
-static char s_bg_string[BG_STRING_LEN] = "";
-static uint8_t s_trend_arrow = ARROW_UNKNOWN;
-static char s_delta_string[DELTA_STRING_LEN] = "";
-static bool s_has_data = false;
+// TODO should this be static?
+static char *safe_strncpy(char *dest, const char *src, size_t count) {
+    strncpy(dest, src, count), dest[count - 1] = '\0';
+    return dest;
+}
 
 // Update the display with current BG data
 // todo rename to update xdrip data?
 static void update_bg_data(void) {
     if (!s_has_data) {
+        // TODO should these just set the values behind instead of write directly to the layers?
         text_layer_set_text(s_bg_layer, "---");
         text_layer_set_text(s_delta_layer, "---");
         text_layer_set_text(s_time_ago_layer, "---");
@@ -158,19 +134,12 @@ static void update_time_and_date(void) {
     text_layer_set_text(s_date_layer, s_date_buffer);
 }
 
-// Window load - create UI
 static void window_load(Window *window) {
     Layer *root_layer = window_get_root_layer(window);
     GRect bounds = layer_get_unobstructed_bounds(root_layer);
 
     // Background
     window_set_background_color(window, GColorWhite);
-
-    // Black background for bottom half (TextLayer used purely for its background color)
-    s_bottom_bg_layer =
-        text_layer_create(GRect(0, bounds.size.h / 2, bounds.size.w, bounds.size.h / 2));
-    text_layer_set_background_color(s_bottom_bg_layer, GColorBlack);
-    layer_add_child(root_layer, text_layer_get_layer(s_bottom_bg_layer));
 
     // BG value - large, centered
     s_bg_layer = text_layer_create(GRect(0, -5, 95, 47));
@@ -204,7 +173,7 @@ static void window_load(Window *window) {
     // Current time - bottom
     s_time_layer = text_layer_create(GRect(0, 82, 143, 44));
     text_layer_set_background_color(s_time_layer, GColorClear);
-    text_layer_set_text_color(s_time_layer, GColorWhite);
+    text_layer_set_text_color(s_time_layer, GColorBlack);
     text_layer_set_font(s_time_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
     text_layer_set_text_alignment(s_time_layer, GTextAlignmentCenter);
     layer_add_child(root_layer, text_layer_get_layer(s_time_layer));
@@ -212,7 +181,7 @@ static void window_load(Window *window) {
     // Date - below time
     s_date_layer = text_layer_create(GRect(0, 120, 143, 29));
     text_layer_set_background_color(s_date_layer, GColorClear);
-    text_layer_set_text_color(s_date_layer, GColorWhite);
+    text_layer_set_text_color(s_date_layer, GColorBlack);
     text_layer_set_font(s_date_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
     text_layer_set_text_alignment(s_date_layer, GTextAlignmentCenter);
     layer_add_child(root_layer, text_layer_get_layer(s_date_layer));
@@ -222,10 +191,8 @@ static void window_load(Window *window) {
     update_bg_data();
 }
 
-
 // Window unload - cleanup UI
 static void window_unload(Window *window) {
-    text_layer_destroy(s_bottom_bg_layer);
     text_layer_destroy(s_bg_layer);
     text_layer_destroy(s_delta_layer);
     text_layer_destroy(s_time_ago_layer);
@@ -237,16 +204,7 @@ static void window_unload(Window *window) {
     }
 }
 
-
-void main_window_create(void) {
-    s_main_window = window_create();
-    window_set_window_handlers(s_main_window,
-                               (WindowHandlers){.load = window_load, .unload = window_unload});
-    window_stack_push(s_main_window, true);
-}
-
-
-void main_window_update_time(void) {
+void main_window_update_time(struct tm *tick_time, TimeUnits units_changed) {
     update_time_and_date();
 
     // Also update BG data time-ago if we have data
@@ -254,14 +212,6 @@ void main_window_update_time(void) {
     if (s_has_data) {
         update_bg_data();
     }
-}
-
-
-// TODO should this be static?
-static char *safe_strncpy( char *dest, const char *src, size_t count ){
-    strncpy(dest, src, count),
-    dest[count-1] = '\0';
-    return dest;
 }
 
 // AppMessage callbacks
@@ -310,7 +260,36 @@ static void outbox_failed_handler(DictionaryIterator *iter, AppMessageResult rea
     APP_LOG(APP_LOG_LEVEL_ERROR, "Message send failed: %d", reason);
 }
 
-void comm_init(void) {
+void send_capability_announcement(void) {
+    DictionaryIterator *iter;
+    AppMessageResult result = app_message_outbox_begin(&iter);
+
+    if (result != APP_MSG_OK) {
+        APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to begin outbox: %d", result);
+        return;
+    }
+
+    dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
+    const uint32_t capabilities = CAP_BG | CAP_TREND_ARROW | CAP_DELTA;
+    dict_write_uint32(iter, KEY_CAPABILITIES, capabilities);
+    dict_write_uint8(iter, KEY_GRAPH_HOURS, 0);
+
+    result = app_message_outbox_send();
+    if (result != APP_MSG_OK) {
+        APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to send capabilities: %d", result);
+    } else {
+        APP_LOG(APP_LOG_LEVEL_INFO, "Sent capability announcement");
+    }
+}
+
+static void bluetooth_callback(bool connected) {
+    if (connected) {
+        // Re-send capabilities on reconnect
+        send_capability_announcement();
+    }
+}
+
+void init(void) {
     // Register callbacks
     app_message_register_inbox_received(inbox_received_handler);
     app_message_register_inbox_dropped(inbox_dropped_handler);
@@ -324,8 +303,6 @@ void comm_init(void) {
     const uint32_t outbox_size = 64;
     app_message_open(inbox_size, outbox_size);
 
-    APP_LOG(APP_LOG_LEVEL_INFO, "Comm initialized");
-
 #ifdef TEST_MODE
     // Populate test data for emulator testing
     s_timestamp = time(NULL) - (TEST_MINUTES_AGO * 60);
@@ -335,79 +312,32 @@ void comm_init(void) {
     s_has_data = true;
     APP_LOG(APP_LOG_LEVEL_INFO, "Test mode: populated sample data");
 #endif
-}
 
-void comm_deinit(void) { app_message_deregister_callbacks(); }
-
-void comm_send_capabilities(void) {
-    DictionaryIterator *iter;
-    AppMessageResult result = app_message_outbox_begin(&iter);
-
-    if (result != APP_MSG_OK) {
-        APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to begin outbox: %d", result);
-        return;
-    }
-
-    // Protocol version
-    dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
-
-    // Capabilities we want
-    dict_write_uint32(iter, KEY_CAPABILITIES, CAP_BG | CAP_TREND_ARROW | CAP_DELTA);
-
-    // No graph for PoC
-    dict_write_uint8(iter, KEY_GRAPH_HOURS, 0);
-
-    result = app_message_outbox_send();
-    if (result != APP_MSG_OK) {
-        APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to send capabilities: %d", result);
-    } else {
-        APP_LOG(APP_LOG_LEVEL_INFO, "Sent capability announcement");
-    }
-}
-
-
-
-
-
-
-
-// Tick handler - called every minute
-static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
-    main_window_update_time();
-}
-
-// Bluetooth connection handler
-static void bluetooth_callback(bool connected) {
-    if (connected) {
-        // Re-send capabilities on reconnect
-        comm_send_capabilities();
-    }
-}
-
-int main(void) {
-    // Initialize communication
-    comm_init();
-
-    // Create and show main window
-    main_window_create();
+    s_window = window_create();
+    window_set_window_handlers(s_window,
+                               (WindowHandlers){.load = window_load, .unload = window_unload});
+    window_stack_push(s_window, true);
 
     // Register tick handler (updates time every minute)
-    tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
+    tick_timer_service_subscribe(MINUTE_UNIT, main_window_update_time);
 
     // Register bluetooth handler (re-send capabilities on reconnect)
     connection_service_subscribe(
         (ConnectionHandlers){.pebble_app_connection_handler = bluetooth_callback});
 
     // Send initial capabilities to xDrip
-    comm_send_capabilities();
+    send_capability_announcement();
+}
 
-    // Main event loop
-    app_event_loop();
-
-    // Cleanup
+void deinit(void) {
+    app_message_deregister_callbacks();
     tick_timer_service_unsubscribe();
     connection_service_unsubscribe();
-    comm_deinit();
+    window_destroy(s_window);
+}
 
-    window_destroy(s_main_window);
+int main(void) {
+    init();
+    app_event_loop();
+    deinit();
 }
