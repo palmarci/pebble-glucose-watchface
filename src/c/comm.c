@@ -16,6 +16,12 @@ static bool s_has_data = false;
 // Callback for new data
 static CommDataCallback s_data_callback = NULL;
 
+static char *safe_strncpy( char *dest, const char *src, size_t count ){
+    strncpy(dest, src, count),
+    dest[count-1] = '\0';
+    return dest;
+}
+
 // AppMessage callbacks
 static void inbox_received_handler(DictionaryIterator *iter, void *context) {
     // Check for timestamp (always present in data messages)
@@ -27,8 +33,7 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
         // BG as string
         Tuple *bg_tuple = dict_find(iter, KEY_BG_STRING);
         if (bg_tuple) {
-            strncpy(s_bg_string, bg_tuple->value->cstring, BG_STRING_LEN - 1);
-            s_bg_string[BG_STRING_LEN - 1] = '\0';
+            safe_strncpy(s_bg_string, bg_tuple->value->cstring, sizeof(s_bg_string));
         }
 
         // Trend arrow
@@ -40,8 +45,7 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
         // Delta as string
         Tuple *delta_tuple = dict_find(iter, KEY_DELTA_STRING);
         if (delta_tuple) {
-            strncpy(s_delta_string, delta_tuple->value->cstring, DELTA_STRING_LEN - 1);
-            s_delta_string[DELTA_STRING_LEN - 1] = '\0';
+            safe_strncpy(s_delta_string, delta_tuple->value->cstring, sizeof(s_delta_string));
         }
 
         // Notify callback
@@ -85,13 +89,10 @@ void comm_init(void) {
 
 #ifdef TEST_MODE
     // Populate test data for emulator testing
-    time_t now = time(NULL);
-    s_timestamp = now - (TEST_MINUTES_AGO * 60);
-    strncpy(s_bg_string, TEST_BG_STRING, BG_STRING_LEN - 1);
-    s_bg_string[BG_STRING_LEN - 1] = '\0';
+    s_timestamp = time(NULL) - (TEST_MINUTES_AGO * 60);
+    safe_strncpy(s_bg_string, TEST_BG_STRING, sizeof(s_bg_string));
     s_trend_arrow = TEST_ARROW_INDEX;
-    strncpy(s_delta_string, TEST_DELTA_STRING, DELTA_STRING_LEN - 1);
-    s_delta_string[DELTA_STRING_LEN - 1] = '\0';
+    safe_strncpy(s_delta_string, TEST_DELTA_STRING, sizeof(s_delta_string));
     s_has_data = true;
     APP_LOG(APP_LOG_LEVEL_INFO, "Test mode: populated sample data");
 #endif

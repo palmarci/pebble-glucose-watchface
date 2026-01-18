@@ -13,13 +13,15 @@ static TextLayer *s_time_layer = NULL;
 static TextLayer *s_date_layer = NULL;
 static BitmapLayer *s_arrow_layer = NULL;
 static GBitmap *s_arrow_bitmap = NULL;
-static TextLayer *s_watch_battery_layer = NULL;
+static TextLayer *s_watch_batt_layer = NULL;
+static TextLayer *s_phone_batt_layer = NULL;
 
 // Text buffers
-static char s_time_ago_buffer[8];
-static char s_time_buffer[8];
-static char s_date_buffer[16];
-static char s_watch_battery_buffer[9];
+static char s_time_ago_buffer[4];   // Fits '59m'
+static char s_time_buffer[6];       // Fits '20:23'
+static char s_date_buffer[11];      // Fits 'Tue 13 Jan'
+static char s_watch_batt_buffer[7]; // Fits 'W:100%'
+static char s_phone_batt_buffer[7]; // Fits 'B:100%'
 
 // Arrow resources
 static const uint32_t ARROW_RESOURCES[] = {
@@ -34,11 +36,13 @@ static const uint32_t ARROW_RESOURCES[] = {
 };
 
 // Update the display with current BG data
+// todo rename to update xdrip data?
 static void update_bg_data(void) {
     if (!comm_has_data()) {
         text_layer_set_text(s_bg_layer, "---");
         text_layer_set_text(s_delta_layer, "---");
         text_layer_set_text(s_time_ago_layer, "---");
+        text_layer_set_text(s_phone_batt_layer, "---");
         return;
     }
 
@@ -71,6 +75,11 @@ static void update_bg_data(void) {
     } else {
         bitmap_layer_set_bitmap(s_arrow_layer, NULL);
     }
+
+    // Phone battery
+    //
+    // uint8_t
+    text_layer_set_text(s_phone_batt_layer, s_phone_batt_buffer);
 }
 
 // Update current time display
@@ -85,8 +94,9 @@ static void update_time_and_date(void) {
 }
 
 void main_window_battery_handler(BatteryChargeState charge_state) {
-    snprintf(s_watch_battery_buffer, 9, "W:%i%%", charge_state.charge_percent);
-    text_layer_set_text(s_watch_battery_layer, s_watch_battery_buffer);
+    snprintf(s_watch_batt_buffer, sizeof(s_watch_batt_buffer), "W:%i%%",
+             charge_state.charge_percent);
+    text_layer_set_text(s_watch_batt_layer, s_watch_batt_buffer);
 }
 
 // Window load - create UI
@@ -148,13 +158,21 @@ static void window_load(Window *window) {
     text_layer_set_text_alignment(s_date_layer, GTextAlignmentCenter);
     layer_add_child(root_layer, text_layer_get_layer(s_date_layer));
 
+    // Phone battery - bottom left
+    s_phone_batt_layer = text_layer_create(GRect(0, 148, 59, 18));
+    text_layer_set_background_color(s_phone_batt_layer, GColorClear);
+    text_layer_set_text_color(s_phone_batt_layer, GColorWhite);
+    text_layer_set_font(s_phone_batt_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+    text_layer_set_text_alignment(s_phone_batt_layer, GTextAlignmentRight);
+    layer_add_child(root_layer, text_layer_get_layer(s_phone_batt_layer));
+
     // Watch battery - bottom right
-    s_watch_battery_layer = text_layer_create(GRect(81, 148, 59, 18));
-    text_layer_set_background_color(s_watch_battery_layer, GColorClear);
-    text_layer_set_text_color(s_watch_battery_layer, GColorWhite);
-    text_layer_set_font(s_watch_battery_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
-    text_layer_set_text_alignment(s_watch_battery_layer, GTextAlignmentRight);
-    layer_add_child(root_layer, text_layer_get_layer(s_watch_battery_layer));
+    s_watch_batt_layer = text_layer_create(GRect(81, 148, 59, 18));
+    text_layer_set_background_color(s_watch_batt_layer, GColorClear);
+    text_layer_set_text_color(s_watch_batt_layer, GColorWhite);
+    text_layer_set_font(s_watch_batt_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+    text_layer_set_text_alignment(s_watch_batt_layer, GTextAlignmentRight);
+    layer_add_child(root_layer, text_layer_get_layer(s_watch_batt_layer));
 
     // Initial update
     update_time_and_date();
@@ -170,7 +188,8 @@ static void window_unload(Window *window) {
     text_layer_destroy(s_time_ago_layer);
     text_layer_destroy(s_time_layer);
     text_layer_destroy(s_date_layer);
-    text_layer_destroy(s_watch_battery_layer);
+    text_layer_destroy(s_watch_batt_layer);
+    text_layer_destroy(s_phone_batt_layer);
     bitmap_layer_destroy(s_arrow_layer);
     if (s_arrow_bitmap) {
         gbitmap_destroy(s_arrow_bitmap);

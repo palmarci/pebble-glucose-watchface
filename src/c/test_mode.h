@@ -9,5 +9,5 @@
 
 #define TEST_BG_STRING "100"
 #define TEST_DELTA_STRING "+0.08"
-#define TEST_MINUTES_AGO 2
+#define TEST_MINUTES_AGO 59
 #define TEST_ARROW_INDEX (time(NULL) % 8)
