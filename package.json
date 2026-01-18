@@ -37,7 +37,7 @@
         {
           "type": "png",
           "name": "ARROW_UP_UP",
-          "file": "images/arrow_up_up.png"
+          "file": "images/arrow_up_double.png"
         },
         {
           "type": "png",
@@ -47,17 +47,17 @@
         {
           "type": "png",
           "name": "ARROW_UP_RIGHT",
-          "file": "images/arrow_up_right.png"
+          "file": "images/arrow_up_slant.png"
         },
         {
           "type": "png",
           "name": "ARROW_RIGHT",
-          "file": "images/arrow_right.png"
+          "file": "images/arrow_flat.png"
         },
         {
           "type": "png",
           "name": "ARROW_DOWN_RIGHT",
-          "file": "images/arrow_down_right.png"
+          "file": "images/arrow_down_slant.png"
         },
         {
           "type": "png",
@@ -67,7 +67,7 @@
         {
           "type": "png",
           "name": "ARROW_DOWN_DOWN",
-          "file": "images/arrow_down_down.png"
+          "file": "images/arrow_down_double.png"
         }
       ]
     }
