@@ -40,8 +40,6 @@ int main(void) {
     connection_service_subscribe(
         (ConnectionHandlers){.pebble_app_connection_handler = bluetooth_callback});
 
-    battery_state_service_subscribe(main_window_battery_handler);
-
     // Send initial capabilities to xDrip
     comm_send_capabilities();
 
