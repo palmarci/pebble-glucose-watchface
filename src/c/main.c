@@ -27,16 +27,6 @@
 #define CAP_DELTA (1 << 2)
 #define CAP_GRAPH (1 << 5)
 
-// Trend arrow indices
-#define ARROW_INDEX_UNKNOWN 0 // no image
-#define ARROW_INDEX_UP_DOUBLE 1
-#define ARROW_INDEX_UP 2
-#define ARROW_INDEX_UP_SLANT 3
-#define ARROW_INDEX_FLAT 4
-#define ARROW_INDEX_DOWN_SLANT 5
-#define ARROW_INDEX_DOWN 6
-#define ARROW_INDEX_DOWN_DOUBLE 7
-
 // Layout elements
 static Window *s_window = NULL;
 static TextLayer *s_bg_layer = NULL;
@@ -51,42 +41,38 @@ static GBitmap *s_arrow_bitmap = NULL;
 // Watchface data
 static bool s_has_data = false; // TODO clarify that this is just "we have ever received data"
 static uint32_t s_bg_timestamp = 0;
-static char s_bg_string[5];    // Fits '10.0'
-static char s_delta_string[6]; // Fits '+10.0'
-static uint8_t s_arrow_index = ARROW_INDEX_UNKNOWN;
-static char s_time_ago_buffer[4]; // Fits '59m'
-static char s_time_buffer[6];     // Fits '20:23'
-static char s_date_buffer[11];    // Fits 'Tue 13 Jan'
+static char s_bg_string[5] = "---";    // Fits '10.0'
+static char s_delta_string[6] = "---"; // Fits '+10.0'
+static uint8_t s_arrow_index = 0;
+static char s_time_ago_buffer[4] = "---"; // Fits '59m'
+static char s_time_buffer[6];             // Fits '20:23'
+static char s_date_buffer[11];            // Fits 'Tue 13 Jan'
 
-// Arrow resources
-// TODO is there not a better way to map indices to resources?
-static const uint32_t ARROW_RESOURCES[] = {0, // ARROW_INDEX_UNKNOWN - no image
-                                           RESOURCE_ID_ARROW_UP_DOUBLE,
-                                           RESOURCE_ID_ARROW_UP,
-                                           RESOURCE_ID_ARROW_UP_SLANT,
-                                           RESOURCE_ID_ARROW_FLAT,
-                                           RESOURCE_ID_ARROW_DOWN_SLANT,
-                                           RESOURCE_ID_ARROW_DOWN,
-                                           RESOURCE_ID_ARROW_DOWN_DOUBLE};
+// Mapping: Arrow index -> Arrow image resource ID
+static const uint32_t ARROWS[] = {0, // unknown, no arrow
+                                  RESOURCE_ID_ARROW_UP_DOUBLE,
+                                  RESOURCE_ID_ARROW_UP,
+                                  RESOURCE_ID_ARROW_UP_SLANT,
+                                  RESOURCE_ID_ARROW_FLAT,
+                                  RESOURCE_ID_ARROW_DOWN_SLANT,
+                                  RESOURCE_ID_ARROW_DOWN,
+                                  RESOURCE_ID_ARROW_DOWN_DOUBLE};
 
-// Helper functions
-// TODO should this be static?
+// Slightly safer string copy
 static char *safe_strncpy(char *dest, const char *src, size_t count) {
-    strncpy(dest, src, count);
-    dest[count - 1] = '\0';
+    if (count > 0) {
+        strncpy(dest, src, count);
+        dest[count - 1] = '\0';
+    }
     return dest;
 }
 
 // Update the display with current BG data
 // todo rename to update xdrip data?
+// TODO rename to say what it actually does
+// TODO document that this just updates the displayed data with whatever we have, so it better be at
+// least properly initialized
 static void update_bg_data(void) {
-    if (!s_has_data) {
-        // TODO should these just set the values behind instead of write directly to the layers?
-        text_layer_set_text(s_bg_layer, "---");
-        text_layer_set_text(s_delta_layer, "---");
-        text_layer_set_text(s_time_ago_layer, "---");
-        return;
-    }
 
     // BG value - just display the string from xDrip
     text_layer_set_text(s_bg_layer, s_bg_string);
@@ -95,9 +81,7 @@ static void update_bg_data(void) {
     text_layer_set_text(s_delta_layer, s_delta_string);
 
     // Time ago - we calculate this locally
-    uint32_t timestamp = s_bg_timestamp;
-    time_t now = time(NULL);
-    int minutes_ago = (now - timestamp) / 60;
+    int minutes_ago = (time(NULL) - s_bg_timestamp) / 60;
     if (minutes_ago < 60) {
         snprintf(s_time_ago_buffer, sizeof(s_time_ago_buffer), "%dm", minutes_ago);
     } else {
@@ -106,13 +90,13 @@ static void update_bg_data(void) {
     text_layer_set_text(s_time_ago_layer, s_time_ago_buffer);
 
     // Arrow
-    uint8_t arrow_index = s_arrow_index;
+    // TODO is this the right way to do it? always destroy, then set, but maybe set to NULL?
     if (s_arrow_bitmap) {
         gbitmap_destroy(s_arrow_bitmap);
         s_arrow_bitmap = NULL;
     }
-    if (arrow_index > 0 && arrow_index < sizeof(ARROW_RESOURCES) / sizeof(ARROW_RESOURCES[0])) {
-        s_arrow_bitmap = gbitmap_create_with_resource(ARROW_RESOURCES[arrow_index]);
+    if (s_arrow_index > 0 && s_arrow_index < sizeof(ARROWS) / sizeof(ARROWS[0])) {
+        s_arrow_bitmap = gbitmap_create_with_resource(ARROWS[s_arrow_index]);
         bitmap_layer_set_bitmap(s_arrow_layer, s_arrow_bitmap);
     } else {
         bitmap_layer_set_bitmap(s_arrow_layer, NULL);
@@ -279,9 +263,9 @@ void init(void) {
 #ifdef TEST_MODE
     // Populate test data for emulator testing
     s_bg_timestamp = time(NULL) - TEST_MINUTES_AGO * 60;
-    safe_strncpy(s_bg_string, TEST_BG_STRING, sizeof(s_bg_string));
+    // safe_strncpy(s_bg_string, TEST_BG_STRING, sizeof(s_bg_string));
     s_arrow_index = TEST_ARROW_INDEX;
-    safe_strncpy(s_delta_string, TEST_DELTA_STRING, sizeof(s_delta_string));
+    // safe_strncpy(s_delta_string, TEST_DELTA_STRING, sizeof(s_delta_string));
     s_has_data = true;
     APP_LOG(APP_LOG_LEVEL_INFO, "Test mode: populated sample data");
 #endif
