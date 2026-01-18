@@ -14,14 +14,12 @@
 // Message keys: Pebble -> xDrip capability announcement
 #define KEY_PROTOCOL_VERSION 0
 #define KEY_CAPABILITIES 1
-#define KEY_GRAPH_HOURS 2
 
 // Message keys: xDrip -> Pebble watchface data
 #define KEY_BG_TIMESTAMP 10 // UNIX epoch time [seconds]
 #define KEY_BG_STRING 11    // Formatted BG value, e.g. "7.5" or "135"
-#define KEY_ARROW_INDEX 12
-#define KEY_DELTA_STRING 13 // Formatted delta, e.g. "+0.3" or "-5"
-#define KEY_GRAPH_DATA 15   // Always mg/dL integers
+#define KEY_DELTA_STRING 12 // Formatted delta, e.g. "+0.3" or "-5"
+#define KEY_ARROW_INDEX 13
 
 // Capability bits (what data the watchface wants to receive)
 #define CAP_BG (1 << 0)
@@ -30,14 +28,14 @@
 #define CAP_GRAPH (1 << 5)
 
 // Trend arrow indices
-#define ARROW_UNKNOWN 0
-#define ARROW_DOUBLE_UP 1
-#define ARROW_UP 2
-#define ARROW_UP_RIGHT 3
-#define ARROW_RIGHT 4
-#define ARROW_DOWN_RIGHT 5
-#define ARROW_DOWN 6
-#define ARROW_DOUBLE_DOWN 7
+#define ARROW_INDEX_UNKNOWN 0 // no image
+#define ARROW_INDEX_UP_DOUBLE 1
+#define ARROW_INDEX_UP 2
+#define ARROW_INDEX_UP_SLANT 3
+#define ARROW_INDEX_FLAT 4
+#define ARROW_INDEX_DOWN_SLANT 5
+#define ARROW_INDEX_DOWN 6
+#define ARROW_INDEX_DOWN_DOUBLE 7
 
 // Layout elements
 static Window *s_window = NULL;
@@ -51,33 +49,31 @@ static GBitmap *s_arrow_bitmap = NULL;
 
 // TODO make a struct?
 // Watchface data
-static bool s_has_data = false;  // TODO clarify that this is just "we have ever received data"
-static uint32_t s_timestamp = 0; // TODO "BG timestamp"?
-static char s_bg_string[8] = "";
-static uint8_t s_trend_arrow = ARROW_UNKNOWN;
-static char s_delta_string[8] = "";
+static bool s_has_data = false; // TODO clarify that this is just "we have ever received data"
+static uint32_t s_bg_timestamp = 0;
+static char s_bg_string[5];    // Fits '10.0'
+static char s_delta_string[6]; // Fits '+10.0'
+static uint8_t s_arrow_index = ARROW_INDEX_UNKNOWN;
 static char s_time_ago_buffer[4]; // Fits '59m'
 static char s_time_buffer[6];     // Fits '20:23'
 static char s_date_buffer[11];    // Fits 'Tue 13 Jan'
 
 // Arrow resources
-// TODO must we do it this way? seems so verbose for nothing
-static const uint32_t ARROW_RESOURCES[] = {
-    0,                            // ARROW_UNKNOWN - no image
-    RESOURCE_ID_ARROW_UP_UP,      // ARROW_DOUBLE_UP
-    RESOURCE_ID_ARROW_UP,         // ARROW_UP
-    RESOURCE_ID_ARROW_UP_RIGHT,   // ARROW_UP_RIGHT
-    RESOURCE_ID_ARROW_RIGHT,      // ARROW_RIGHT
-    RESOURCE_ID_ARROW_DOWN_RIGHT, // ARROW_DOWN_RIGHT
-    RESOURCE_ID_ARROW_DOWN,       // ARROW_DOWN
-    RESOURCE_ID_ARROW_DOWN_DOWN   // ARROW_DOUBLE_DOWN
-};
+// TODO is there not a better way to map indices to resources?
+static const uint32_t ARROW_RESOURCES[] = {0, // ARROW_INDEX_UNKNOWN - no image
+                                           RESOURCE_ID_ARROW_UP_DOUBLE,
+                                           RESOURCE_ID_ARROW_UP,
+                                           RESOURCE_ID_ARROW_UP_SLANT,
+                                           RESOURCE_ID_ARROW_FLAT,
+                                           RESOURCE_ID_ARROW_DOWN_SLANT,
+                                           RESOURCE_ID_ARROW_DOWN,
+                                           RESOURCE_ID_ARROW_DOWN_DOUBLE};
 
 // Helper functions
-
 // TODO should this be static?
 static char *safe_strncpy(char *dest, const char *src, size_t count) {
-    strncpy(dest, src, count), dest[count - 1] = '\0';
+    strncpy(dest, src, count);
+    dest[count - 1] = '\0';
     return dest;
 }
 
@@ -99,7 +95,7 @@ static void update_bg_data(void) {
     text_layer_set_text(s_delta_layer, s_delta_string);
 
     // Time ago - we calculate this locally
-    uint32_t timestamp = s_timestamp;
+    uint32_t timestamp = s_bg_timestamp;
     time_t now = time(NULL);
     int minutes_ago = (now - timestamp) / 60;
     if (minutes_ago < 60) {
@@ -110,7 +106,7 @@ static void update_bg_data(void) {
     text_layer_set_text(s_time_ago_layer, s_time_ago_buffer);
 
     // Arrow
-    uint8_t arrow_index = s_trend_arrow;
+    uint8_t arrow_index = s_arrow_index;
     if (s_arrow_bitmap) {
         gbitmap_destroy(s_arrow_bitmap);
         s_arrow_bitmap = NULL;
@@ -136,10 +132,6 @@ static void update_time_and_date(void) {
 
 static void window_load(Window *window) {
     Layer *root_layer = window_get_root_layer(window);
-    GRect bounds = layer_get_unobstructed_bounds(root_layer);
-
-    // Background
-    window_set_background_color(window, GColorWhite);
 
     // BG value - top, left
     s_bg_layer = text_layer_create(GRect(0, 0, PBL_DISPLAY_WIDTH - 30 - 10, 42));
@@ -219,7 +211,7 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
     // Check for timestamp (always present in data messages)
     Tuple *timestamp_tuple = dict_find(iter, KEY_BG_TIMESTAMP);
     if (timestamp_tuple) {
-        s_timestamp = timestamp_tuple->value->uint32;
+        s_bg_timestamp = timestamp_tuple->value->uint32;
         s_has_data = true;
 
         // BG as string
@@ -231,7 +223,7 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
         // Trend arrow
         Tuple *arrow_tuple = dict_find(iter, KEY_ARROW_INDEX);
         if (arrow_tuple) {
-            s_trend_arrow = arrow_tuple->value->uint8;
+            s_arrow_index = arrow_tuple->value->uint8;
         }
 
         // Delta as string
@@ -243,21 +235,8 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
         update_bg_data();
 
         APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s, arrow: %d, delta: %s", s_bg_string,
-                s_trend_arrow, s_delta_string);
+                s_arrow_index, s_delta_string);
     }
-}
-
-static void inbox_dropped_handler(AppMessageResult reason, void *context) {
-    APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
-}
-
-static void outbox_sent_handler(DictionaryIterator *iter, void *context) {
-    APP_LOG(APP_LOG_LEVEL_DEBUG, "Message sent successfully");
-}
-
-static void outbox_failed_handler(DictionaryIterator *iter, AppMessageResult reason,
-                                  void *context) {
-    APP_LOG(APP_LOG_LEVEL_ERROR, "Message send failed: %d", reason);
 }
 
 void send_capability_announcement(void) {
@@ -272,7 +251,6 @@ void send_capability_announcement(void) {
     dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
     const uint32_t capabilities = CAP_BG | CAP_TREND_ARROW | CAP_DELTA;
     dict_write_uint32(iter, KEY_CAPABILITIES, capabilities);
-    dict_write_uint8(iter, KEY_GRAPH_HOURS, 0);
 
     result = app_message_outbox_send();
     if (result != APP_MSG_OK) {
@@ -292,22 +270,17 @@ static void bluetooth_callback(bool connected) {
 void init(void) {
     // Register callbacks
     app_message_register_inbox_received(inbox_received_handler);
-    app_message_register_inbox_dropped(inbox_dropped_handler);
-    app_message_register_outbox_sent(outbox_sent_handler);
-    app_message_register_outbox_failed(outbox_failed_handler);
 
-    // Open AppMessage with reasonable buffer sizes
     // Inbox needs to be large enough for string data
     // Outbox only needs enough for capability announcement
-    const uint32_t inbox_size = 256;
-    const uint32_t outbox_size = 64;
-    app_message_open(inbox_size, outbox_size);
+    // TODO check dictionary
+    app_message_open(/*inbox_size*/ 256, /*outbox_size*/ 64);
 
 #ifdef TEST_MODE
     // Populate test data for emulator testing
-    s_timestamp = time(NULL) - (TEST_MINUTES_AGO * 60);
+    s_bg_timestamp = time(NULL) - TEST_MINUTES_AGO * 60;
     safe_strncpy(s_bg_string, TEST_BG_STRING, sizeof(s_bg_string));
-    s_trend_arrow = TEST_ARROW_INDEX;
+    s_arrow_index = TEST_ARROW_INDEX;
     safe_strncpy(s_delta_string, TEST_DELTA_STRING, sizeof(s_delta_string));
     s_has_data = true;
     APP_LOG(APP_LOG_LEVEL_INFO, "Test mode: populated sample data");
