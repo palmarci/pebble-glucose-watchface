@@ -1,12 +1,16 @@
 // xDrip Pebble reference watchface
 //
 // This is a simple watchface created to serve as a reference for the new xDrip-Pebble communication
-// protocol. It displays blood glucose, BG delta, time ago, trend arrow, and BG graph, in addition
-// to the time and date.
+// protocol. It displays:
 //
-// Displays "---" glucose, no arrow, no time ago, no delta, until we get data from xDrip.
-
-// TODO see x for info about the protocol
+//   - blood glucose
+//   - trend arrow
+//   - time ago (time since BG reading)
+//   - BG delta
+//   - BG graph
+//   - time and date
+//
+// Until it gets data, it displays "---" for glucose and nothing for the rest.
 
 #include "test_mode.h"
 #include <pebble.h>
@@ -39,7 +43,6 @@ static TextLayer *s_date_layer = NULL;
 static BitmapLayer *s_arrow_layer = NULL;
 static GBitmap *s_arrow_bitmap = NULL;
 
-// TODO make a struct?
 // Watchface data
 static uint32_t s_bg_timestamp = 0;    // Seconds since epoch
 static char s_bg_string[5] = "---";    // Fits '10.0'
@@ -59,8 +62,7 @@ static const uint32_t ARROWS[] = {0, // unknown, no arrow
                                   RESOURCE_ID_ARROW_DOWN,
                                   RESOURCE_ID_ARROW_DOWN_DOUBLE};
 
-// Slightly safer string copy
-static char *safe_strncpy(char *dest, const char *src, size_t count) {
+static inline char *safe_strncpy(char *dest, const char *src, size_t count) {
     if (count > 0) {
         strncpy(dest, src, count);
         dest[count - 1] = '\0';
@@ -216,6 +218,7 @@ static void new_xdrip_data_callback(DictionaryIterator *iter, void *context) {
     }
 }
 
+// This can also be used to trigger xDrip to send fresh data.
 void send_capability_announcement(void) {
     DictionaryIterator *iter;
     AppMessageResult result = app_message_outbox_begin(&iter);
@@ -238,9 +241,7 @@ void send_capability_announcement(void) {
 }
 
 static void bluetooth_callback(bool connected) {
-    // Re-send capabilities on reconnect
-    // TODO necessary? maybe to trigger a swift update after being out of bluetooth range for a
-    // while, so we don't wait for the next 5 min xdrip data send interval
+    // Re-send capabilities on reconnect. This triggers xDrip to send fresh data.
     if (connected) {
         send_capability_announcement();
     }
@@ -257,7 +258,7 @@ void init_test_mode_data(void) {
 
 void init(void) {
     app_message_register_inbox_received(new_xdrip_data_callback);
-    app_message_open(/*in*/ 256, /*out*/ 64); // TODO adjust sizes
+    app_message_open(/*in*/ 256, /*out*/ 64);
 
     tick_timer_service_subscribe(MINUTE_UNIT, minute_tick_callback);
 
@@ -269,7 +270,7 @@ void init(void) {
                                (WindowHandlers){.load = window_load, .unload = window_unload});
     window_stack_push(s_window, /*animated*/ true);
 
-    // send_capability_announcement();
+    send_capability_announcement();
 }
 
 void deinit(void) {
@@ -280,10 +281,6 @@ void deinit(void) {
 }
 
 int main(void) {
-
-    APP_LOG(APP_LOG_LEVEL_WARNING, "Received BG: %s, arrow: %d, delta: %s", s_bg_string,
-            s_arrow_index, s_delta_string);
-
     init_test_mode_data();
     init();
     app_event_loop();
