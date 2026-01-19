@@ -42,6 +42,7 @@ static TextLayer *s_time_layer = NULL;
 static TextLayer *s_date_layer = NULL;
 static BitmapLayer *s_arrow_layer = NULL;
 static GBitmap *s_arrow_bitmap = NULL;
+static Layer *s_example_drawing_layer = NULL; // Custom drawing layer for examples
 
 // Watchface data
 static uint32_t s_bg_timestamp = 0;    // Seconds since epoch
@@ -115,6 +116,59 @@ static void update_displayed_time_and_date(void) {
     text_layer_set_text(s_date_layer, s_date_buffer);
 }
 
+// Example drawing callback - demonstrates Pebble graphics primitives
+// This function is called whenever the layer needs to be redrawn
+static void example_drawing_update_proc(Layer *layer, GContext *ctx) {
+    GRect bounds = layer_get_bounds(layer);
+
+    // Example 1: Draw some dots (filled circles)
+    // graphics_fill_circle draws a solid circle
+    graphics_context_set_fill_color(ctx, GColorBlack);
+    graphics_fill_circle(ctx, GPoint(10, 10), 1); // Small dot at (10,10) with radius 3
+    graphics_fill_circle(ctx, GPoint(20, 10), 2);
+    graphics_fill_circle(ctx, GPoint(30, 10), 3);
+    graphics_fill_circle(ctx, GPoint(40, 10), 4);
+    graphics_fill_circle(ctx, GPoint(50, 10), 5);
+
+    // Example 2: Draw some unfilled circles (outlines only)
+    // graphics_draw_circle draws just the circle outline
+    graphics_context_set_stroke_color(ctx, GColorBlack);
+    graphics_draw_circle(ctx, GPoint(80, 10), 5); // Hollow circle at (50,10) with radius 5
+    graphics_draw_circle(ctx, GPoint(95, 10), 5);
+
+    // Example 3: Draw lines with different stroke widths
+    // graphics_draw_line draws a straight line between two points
+    graphics_context_set_stroke_width(ctx, 1); // Thin line
+    graphics_draw_line(ctx, GPoint(5, 25), GPoint(bounds.size.w - 5, 25));
+
+    graphics_context_set_stroke_width(ctx, 3); // Thick line
+    graphics_draw_line(ctx, GPoint(5, 35), GPoint(bounds.size.w - 5, 35));
+
+    // Example 4: Draw a simple graph-like pattern
+    // This shows how you might draw a blood glucose graph
+    graphics_context_set_stroke_width(ctx, 2);
+
+    // Draw some random connected points to simulate a graph
+    GPoint points[] = {{10, 50}, {30, 45}, {50, 55}, {70, 40}, {90, 48}, {110, 42}, {130, 50}};
+
+    for (int i = 0; i < 6; i++) {
+        // Draw line between consecutive points
+        graphics_draw_line(ctx, points[i], points[i + 1]);
+        // Draw a dot at each data point
+        graphics_fill_circle(ctx, points[i], 2);
+    }
+    // Draw the last point
+    graphics_fill_circle(ctx, points[6], 2);
+
+    // Example 5: Draw a rectangle outline
+    graphics_context_set_stroke_width(ctx, 1);
+    graphics_draw_rect(ctx, GRect(5, 60, bounds.size.w - 10, 10));
+
+    // Example 6: Draw a filled rectangle
+    graphics_context_set_fill_color(ctx, GColorBlack);
+    graphics_fill_rect(ctx, GRect(5, 72, 20, 5), 0, GCornerNone);
+}
+
 static void window_load(Window *window) {
     Layer *root_layer = window_get_root_layer(window);
 
@@ -137,7 +191,7 @@ static void window_load(Window *window) {
     text_layer_set_text_color(s_time_ago_layer, GColorBlack);
     text_layer_set_font(s_time_ago_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
     text_layer_set_text_alignment(s_time_ago_layer, GTextAlignmentLeft);
-    layer_add_child(root_layer, text_layer_get_layer(s_time_ago_layer));
+    // layer_add_child(root_layer, text_layer_get_layer(s_time_ago_layer));
 
     // Delta - below BG, right
     s_delta_layer = text_layer_create(GRect(PBL_DISPLAY_WIDTH - 50 - 10, 42, 50, 42));
@@ -145,7 +199,14 @@ static void window_load(Window *window) {
     text_layer_set_text_color(s_delta_layer, GColorBlack);
     text_layer_set_font(s_delta_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
     text_layer_set_text_alignment(s_delta_layer, GTextAlignmentRight);
-    layer_add_child(root_layer, text_layer_get_layer(s_delta_layer));
+    // layer_add_child(root_layer, text_layer_get_layer(s_delta_layer));
+
+    // Example drawing layer - demonstrates graphics primitives (lines, dots, etc.)
+    // This layer is positioned below the delta/time ago area
+    s_example_drawing_layer =
+        layer_create(GRect(0, 0.35 * PBL_DISPLAY_HEIGHT, PBL_DISPLAY_WIDTH, 80));
+    layer_set_update_proc(s_example_drawing_layer, example_drawing_update_proc);
+    layer_add_child(root_layer, s_example_drawing_layer);
 
     // Current time - bottom, centered
     s_time_layer = text_layer_create(GRect(0, 82, PBL_DISPLAY_WIDTH, 42));
@@ -153,7 +214,7 @@ static void window_load(Window *window) {
     text_layer_set_text_color(s_time_layer, GColorBlack);
     text_layer_set_font(s_time_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
     text_layer_set_text_alignment(s_time_layer, GTextAlignmentCenter);
-    layer_add_child(root_layer, text_layer_get_layer(s_time_layer));
+    // layer_add_child(root_layer, text_layer_get_layer(s_time_layer));
 
     // Date - below time
     s_date_layer = text_layer_create(GRect(0, 126, PBL_DISPLAY_WIDTH, 24));
@@ -161,7 +222,7 @@ static void window_load(Window *window) {
     text_layer_set_text_color(s_date_layer, GColorBlack);
     text_layer_set_font(s_date_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
     text_layer_set_text_alignment(s_date_layer, GTextAlignmentCenter);
-    layer_add_child(root_layer, text_layer_get_layer(s_date_layer));
+    // layer_add_child(root_layer, text_layer_get_layer(s_date_layer));
 
     // Initial update
     update_displayed_xdrip_data();
@@ -179,6 +240,7 @@ static void window_unload(Window *window) {
     if (s_arrow_bitmap) {
         gbitmap_destroy(s_arrow_bitmap);
     }
+    layer_destroy(s_example_drawing_layer);
 }
 
 void minute_tick_callback(struct tm *tick_time, TimeUnits units_changed) {
