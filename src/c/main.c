@@ -39,7 +39,6 @@ static GBitmap *s_arrow_bitmap = NULL;
 
 // TODO make a struct?
 // Watchface data
-static bool s_has_data = false; // TODO clarify that this is just "we have ever received data"
 static uint32_t s_bg_timestamp = 0;
 static char s_bg_string[5] = "---";    // Fits '10.0'
 static char s_delta_string[6] = "---"; // Fits '+10.0'
@@ -67,30 +66,25 @@ static char *safe_strncpy(char *dest, const char *src, size_t count) {
     return dest;
 }
 
-// Update the display with current BG data
-// todo rename to update xdrip data?
-// TODO rename to say what it actually does
-// TODO document that this just updates the displayed data with whatever we have, so it better be at
-// least properly initialized
-static void update_bg_data(void) {
-
-    // BG value - just display the string from xDrip
-    text_layer_set_text(s_bg_layer, s_bg_string);
-
-    // Delta - just display the string from xDrip
-    text_layer_set_text(s_delta_layer, s_delta_string);
-
+static void update_displayed_time_ago(void) {
     // Time ago - we calculate this locally
-    int minutes_ago = (time(NULL) - s_bg_timestamp) / 60;
+    const int minutes_ago = (time(NULL) - s_bg_timestamp) / 60;
     if (minutes_ago < 60) {
         snprintf(s_time_ago_buffer, sizeof(s_time_ago_buffer), "%dm", minutes_ago);
     } else {
         snprintf(s_time_ago_buffer, sizeof(s_time_ago_buffer), "%dh", minutes_ago / 60);
     }
     text_layer_set_text(s_time_ago_layer, s_time_ago_buffer);
+}
 
-    // Arrow
-    // TODO is this the right way to do it? always destroy, then set, but maybe set to NULL?
+static void update_displayed_xdrip_data(void) {
+    // Update displayed BG value
+    text_layer_set_text(s_bg_layer, s_bg_string);
+
+    // Update displayed delta value
+    text_layer_set_text(s_delta_layer, s_delta_string);
+
+    // Update displayed trend arrow
     if (s_arrow_bitmap) {
         gbitmap_destroy(s_arrow_bitmap);
         s_arrow_bitmap = NULL;
@@ -103,8 +97,7 @@ static void update_bg_data(void) {
     }
 }
 
-// Update current time display
-static void update_time_and_date(void) {
+static void update_displayed_time_and_date(void) {
     time_t now = time(NULL);
     struct tm *tick_time = localtime(&now);
     strftime(s_time_buffer, sizeof(s_time_buffer), clock_is_24h_style() ? "%H:%M" : "%I:%M",
@@ -163,8 +156,9 @@ static void window_load(Window *window) {
     layer_add_child(root_layer, text_layer_get_layer(s_date_layer));
 
     // Initial update
-    update_time_and_date();
-    update_bg_data();
+    update_displayed_xdrip_data();
+    update_displayed_time_and_date();
+    update_displayed_time_ago();
 }
 
 // Window unload - cleanup UI
@@ -180,23 +174,17 @@ static void window_unload(Window *window) {
     }
 }
 
-void main_window_update_time(struct tm *tick_time, TimeUnits units_changed) {
-    update_time_and_date();
-
-    // Also update BG data time-ago if we have data
-    // TODO split out update time ago specifically?
-    if (s_has_data) {
-        update_bg_data();
-    }
+void minute_tick_callback(struct tm *tick_time, TimeUnits units_changed) {
+    update_displayed_time_and_date(); // TODO pass tick?
+    update_displayed_time_ago();
 }
 
 // AppMessage callbacks
-static void inbox_received_handler(DictionaryIterator *iter, void *context) {
+static void new_xdrip_data_callback(DictionaryIterator *iter, void *context) {
     // Check for timestamp (always present in data messages)
     Tuple *timestamp_tuple = dict_find(iter, KEY_BG_TIMESTAMP);
     if (timestamp_tuple) {
         s_bg_timestamp = timestamp_tuple->value->uint32;
-        s_has_data = true;
 
         // BG as string
         Tuple *bg_tuple = dict_find(iter, KEY_BG_STRING);
@@ -216,7 +204,8 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
             safe_strncpy(s_delta_string, delta_tuple->value->cstring, sizeof(s_delta_string));
         }
 
-        update_bg_data();
+        update_displayed_xdrip_data();
+        update_displayed_time_ago();
 
         APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s, arrow: %d, delta: %s", s_bg_string,
                 s_arrow_index, s_delta_string);
@@ -251,32 +240,31 @@ static void bluetooth_callback(bool connected) {
     }
 }
 
+void init_test_mode_data(void) {
+#ifdef TEST_MODE
+    s_bg_timestamp = time(NULL) - TEST_MINUTES_AGO * 60;
+    safe_strncpy(s_bg_string, TEST_BG_STRING, sizeof(s_bg_string));
+    s_arrow_index = TEST_ARROW_INDEX;
+    safe_strncpy(s_delta_string, TEST_DELTA_STRING, sizeof(s_delta_string));
+    APP_LOG(APP_LOG_LEVEL_INFO, "Test mode: populated sample data");
+#endif
+}
+
 void init(void) {
     // Register callbacks
-    app_message_register_inbox_received(inbox_received_handler);
+    app_message_register_inbox_received(new_xdrip_data_callback);
 
     // Inbox needs to be large enough for string data
     // Outbox only needs enough for capability announcement
     // TODO check dictionary
-    app_message_open(/*inbox_size*/ 256, /*outbox_size*/ 64);
-
-#ifdef TEST_MODE
-    // Populate test data for emulator testing
-    s_bg_timestamp = time(NULL) - TEST_MINUTES_AGO * 60;
-    // safe_strncpy(s_bg_string, TEST_BG_STRING, sizeof(s_bg_string));
-    s_arrow_index = TEST_ARROW_INDEX;
-    // safe_strncpy(s_delta_string, TEST_DELTA_STRING, sizeof(s_delta_string));
-    s_has_data = true;
-    APP_LOG(APP_LOG_LEVEL_INFO, "Test mode: populated sample data");
-#endif
+    app_message_open(/*in*/ 256, /*out*/ 64);
 
     s_window = window_create();
     window_set_window_handlers(s_window,
                                (WindowHandlers){.load = window_load, .unload = window_unload});
-    window_stack_push(s_window, true);
+    window_stack_push(s_window, /*animated*/ true);
 
-    // Register tick handler (updates time every minute)
-    tick_timer_service_subscribe(MINUTE_UNIT, main_window_update_time);
+    tick_timer_service_subscribe(MINUTE_UNIT, minute_tick_callback);
 
     // Register bluetooth handler (re-send capabilities on reconnect)
     connection_service_subscribe(
@@ -294,6 +282,7 @@ void deinit(void) {
 }
 
 int main(void) {
+    init_test_mode_data();
     init();
     app_event_loop();
     deinit();
