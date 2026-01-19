@@ -67,7 +67,6 @@ static char *safe_strncpy(char *dest, const char *src, size_t count) {
 }
 
 static void update_displayed_time_ago(void) {
-    // Time ago - we calculate this locally
     const int minutes_ago = (time(NULL) - s_bg_timestamp) / 60;
     if (minutes_ago < 60) {
         snprintf(s_time_ago_buffer, sizeof(s_time_ago_buffer), "%dm", minutes_ago);
@@ -161,7 +160,6 @@ static void window_load(Window *window) {
     update_displayed_time_ago();
 }
 
-// Window unload - cleanup UI
 static void window_unload(Window *window) {
     text_layer_destroy(s_bg_layer);
     text_layer_destroy(s_delta_layer);
@@ -179,7 +177,6 @@ void minute_tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     update_displayed_time_ago();
 }
 
-// AppMessage callbacks
 static void new_xdrip_data_callback(DictionaryIterator *iter, void *context) {
     // Check for timestamp (always present in data messages)
     Tuple *timestamp_tuple = dict_find(iter, KEY_BG_TIMESTAMP);
@@ -234,8 +231,10 @@ void send_capability_announcement(void) {
 }
 
 static void bluetooth_callback(bool connected) {
+    // Re-send capabilities on reconnect
+    // TODO necessary? maybe to trigger a swift update after being out of bluetooth range for a
+    // while, so we don't wait for the next 5 min xdrip data send interval
     if (connected) {
-        // Re-send capabilities on reconnect
         send_capability_announcement();
     }
 }
@@ -251,26 +250,19 @@ void init_test_mode_data(void) {
 }
 
 void init(void) {
-    // Register callbacks
     app_message_register_inbox_received(new_xdrip_data_callback);
+    app_message_open(/*in*/ 256, /*out*/ 64); // TODO adjust sizes
 
-    // Inbox needs to be large enough for string data
-    // Outbox only needs enough for capability announcement
-    // TODO check dictionary
-    app_message_open(/*in*/ 256, /*out*/ 64);
+    tick_timer_service_subscribe(MINUTE_UNIT, minute_tick_callback);
+
+    connection_service_subscribe(
+        (ConnectionHandlers){.pebble_app_connection_handler = bluetooth_callback});
 
     s_window = window_create();
     window_set_window_handlers(s_window,
                                (WindowHandlers){.load = window_load, .unload = window_unload});
     window_stack_push(s_window, /*animated*/ true);
 
-    tick_timer_service_subscribe(MINUTE_UNIT, minute_tick_callback);
-
-    // Register bluetooth handler (re-send capabilities on reconnect)
-    connection_service_subscribe(
-        (ConnectionHandlers){.pebble_app_connection_handler = bluetooth_callback});
-
-    // Send initial capabilities to xDrip
     send_capability_announcement();
 }
 
