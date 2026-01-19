@@ -4,6 +4,8 @@
 // protocol. It displays blood glucose, BG delta, time ago, trend arrow, and BG graph, in addition
 // to the time and date.
 //
+// Displays "---" glucose, no arrow, no time ago, no delta, until we get data from xDrip.
+
 // TODO see x for info about the protocol
 
 #include "test_mode.h"
@@ -39,13 +41,13 @@ static GBitmap *s_arrow_bitmap = NULL;
 
 // TODO make a struct?
 // Watchface data
-static uint32_t s_bg_timestamp = 0;
+static uint32_t s_bg_timestamp = 0;    // Seconds since epoch
 static char s_bg_string[5] = "---";    // Fits '10.0'
-static char s_delta_string[6] = "---"; // Fits '+10.0'
-static uint8_t s_arrow_index = 0;
-static char s_time_ago_buffer[4] = "---"; // Fits '59m'
-static char s_time_buffer[6];             // Fits '20:23'
-static char s_date_buffer[11];            // Fits 'Tue 13 Jan'
+static char s_delta_string[6] = "";    // Fits '+0.06'
+static uint8_t s_arrow_index = 0;      // See ARROWS below
+static char s_time_ago_buffer[4] = ""; // Fits '99h'
+static char s_time_buffer[6] = "";     // Fits '20:23'
+static char s_date_buffer[11] = "";    // Fits 'Tue 13 Jan'
 
 // Mapping: Arrow index -> Arrow image resource ID
 static const uint32_t ARROWS[] = {0, // unknown, no arrow
@@ -67,6 +69,11 @@ static char *safe_strncpy(char *dest, const char *src, size_t count) {
 }
 
 static void update_displayed_time_ago(void) {
+    // Don't populate until we have valid data.
+    if (s_bg_timestamp == 0) {
+        return;
+    }
+
     const int minutes_ago = (time(NULL) - s_bg_timestamp) / 60;
     if (minutes_ago < 60) {
         snprintf(s_time_ago_buffer, sizeof(s_time_ago_buffer), "%dm", minutes_ago);
@@ -245,7 +252,6 @@ void init_test_mode_data(void) {
     safe_strncpy(s_bg_string, TEST_BG_STRING, sizeof(s_bg_string));
     s_arrow_index = TEST_ARROW_INDEX;
     safe_strncpy(s_delta_string, TEST_DELTA_STRING, sizeof(s_delta_string));
-    APP_LOG(APP_LOG_LEVEL_INFO, "Test mode: populated sample data");
 #endif
 }
 
@@ -263,7 +269,7 @@ void init(void) {
                                (WindowHandlers){.load = window_load, .unload = window_unload});
     window_stack_push(s_window, /*animated*/ true);
 
-    send_capability_announcement();
+    // send_capability_announcement();
 }
 
 void deinit(void) {
@@ -274,6 +280,10 @@ void deinit(void) {
 }
 
 int main(void) {
+
+    APP_LOG(APP_LOG_LEVEL_WARNING, "Received BG: %s, arrow: %d, delta: %s", s_bg_string,
+            s_arrow_index, s_delta_string);
+
     init_test_mode_data();
     init();
     app_event_loop();
