@@ -27,7 +27,7 @@
       "BgTimestamp": 10,
       "BgString": 11,
       "DeltaString": 12,
-      "TrendArrowIndex": 13
+      "ArrowIndex": 13
     },
     "resources": {
       "media": [
