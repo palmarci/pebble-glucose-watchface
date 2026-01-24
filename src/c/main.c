@@ -26,7 +26,9 @@
 #define KEY_BG_STRING 11    // Formatted BG value, e.g. "7.5" or "135"
 #define KEY_DELTA_STRING 12 // Formatted delta, e.g. "+0.3" or "-5"
 #define KEY_ARROW_INDEX 13
-#define KEY_GRAPH_DATA 20 // Byte array: raw graph data
+#define KEY_GRAPH_DATA 20      // Byte array: raw graph data
+#define KEY_GRAPH_HIGH_LINE 21 // uint16: high BG threshold in mg/dL
+#define KEY_GRAPH_LOW_LINE 22  // uint16: low BG threshold in mg/dL
 
 // Capability bits (what data the watchface wants to receive)
 #define CAP_BG (1 << 0)
@@ -60,6 +62,8 @@ static uint32_t s_graph_ref_timestamp = 0;           // Reference timestamp (sec
 static uint8_t s_graph_count = 0;                    // Number of graph points
 static uint8_t s_graph_offsets[MAX_GRAPH_POINTS];    // Minutes since ref_timestamp
 static uint16_t s_graph_bg_values[MAX_GRAPH_POINTS]; // BG values in mg/dL
+static uint16_t s_graph_high_line = 180;             // High BG threshold (mg/dL)
+static uint16_t s_graph_low_line = 72;               // Low BG threshold (mg/dL)
 
 // Mapping: Arrow index -> Arrow image resource ID
 static const uint32_t ARROWS[] = {0, // unknown, no arrow
@@ -140,6 +144,21 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
 
     graphics_context_set_fill_color(ctx, GColorBlack);
 
+    // Draw high/low threshold lines (2px horizontal lines)
+    int high_y = height - ((s_graph_high_line - bg_min) * height) / (bg_max - bg_min);
+    int low_y = height - ((s_graph_low_line - bg_min) * height) / (bg_max - bg_min);
+
+    // Only draw lines if they're within the visible range
+    // if (high_y >= 0 && high_y <= height) {
+    graphics_fill_rect(ctx, GRect(0, high_y, width, 2), 0, GCornerNone);
+    // graphics_context_set_stroke_width(ctx, 2);
+    // graphics_draw_line(ctx, GPoint(0, high_y), GPoint(width, high_y));
+    // }
+    // if (low_y >= 0 && low_y <= height) {
+    graphics_fill_rect(ctx, GRect(0, low_y, width, 2), 0, GCornerNone);
+    // graphics_draw_line(ctx, GPoint(0, low_y), GPoint(width, low_y));
+    // }
+
     // Draw each point as a dot
     for (int i = 0; i < s_graph_count; i++) {
         // X position: offset / total_duration * width
@@ -191,12 +210,12 @@ static void window_load(Window *window) {
     layer_add_child(root_layer, text_layer_get_layer(s_delta_layer));
 
     // Graph - middle of screen
-    s_graph_layer = layer_create(GRect(0, 60, PBL_DISPLAY_WIDTH, 40));
+    s_graph_layer = layer_create(GRect(0, 35, PBL_DISPLAY_WIDTH, 100));
     layer_set_update_proc(s_graph_layer, graph_layer_update_proc);
     layer_add_child(root_layer, s_graph_layer);
 
     // Current time - bottom, centered
-    s_time_layer = text_layer_create(GRect(0, 100, PBL_DISPLAY_WIDTH, 42));
+    s_time_layer = text_layer_create(GRect(0, 105, PBL_DISPLAY_WIDTH, 42));
     text_layer_set_background_color(s_time_layer, GColorClear);
     text_layer_set_text_color(s_time_layer, GColorBlack);
     text_layer_set_font(s_time_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
@@ -294,6 +313,17 @@ static void new_xdrip_data_callback(DictionaryIterator *iter, void *context) {
             } else {
                 APP_LOG(APP_LOG_LEVEL_ERROR, "Graph data too short");
             }
+        }
+
+        // Graph high/low lines
+        Tuple *high_line_tuple = dict_find(iter, KEY_GRAPH_HIGH_LINE);
+        if (high_line_tuple) {
+            s_graph_high_line = high_line_tuple->value->uint16;
+        }
+
+        Tuple *low_line_tuple = dict_find(iter, KEY_GRAPH_LOW_LINE);
+        if (low_line_tuple) {
+            s_graph_low_line = low_line_tuple->value->uint16;
         }
 
         update_displayed_xdrip_data();
