@@ -24,6 +24,7 @@
     "messageKeys": {
       "ProtocolVersion": 0,
       "Capabilities": 1,
+      "GraphHours": 2,
       "BgTimestamp": 10,
       "BgString": 11,
       "DeltaString": 12,
