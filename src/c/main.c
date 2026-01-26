@@ -22,6 +22,7 @@ static TextLayer *s_delta_layer = NULL;
 static TextLayer *s_time_ago_layer = NULL;
 static TextLayer *s_time_layer = NULL;
 static TextLayer *s_date_layer = NULL;
+static TextLayer *s_phone_battery_layer = NULL;
 static BitmapLayer *s_arrow_layer = NULL;
 static GBitmap *s_arrow_bitmap = NULL;
 static Layer *s_graph_layer = NULL;
@@ -34,6 +35,8 @@ static uint8_t s_arrow_index = 0;      // See ARROWS below
 static char s_time_ago_buffer[4] = ""; // Fits '99h'
 static char s_time_buffer[6] = "";     // Fits '20:23'
 static char s_date_buffer[11] = "";    // Fits 'Tue 13 Jan'
+static uint8_t s_phone_battery = 0;    // Phone battery level (0-100)
+static char s_phone_battery_buffer[5] = ""; // Fits '100%'
 
 // Graph config
 // All graph BG values are stored in "mg/dL / 2" units (matching wire protocol).
@@ -108,6 +111,15 @@ static void update_displayed_time_and_date(void) {
     text_layer_set_text(s_time_layer, s_time_buffer);
     strftime(s_date_buffer, sizeof(s_date_buffer), "%a %d %b", tick_time);
     text_layer_set_text(s_date_layer, s_date_buffer);
+}
+
+static void update_displayed_phone_battery(void) {
+    if (s_phone_battery > 0) {
+        snprintf(s_phone_battery_buffer, sizeof(s_phone_battery_buffer), "%d%%", s_phone_battery);
+    } else {
+        s_phone_battery_buffer[0] = '\0'; // Empty if no data
+    }
+    text_layer_set_text(s_phone_battery_layer, s_phone_battery_buffer);
 }
 
 static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
@@ -219,10 +231,19 @@ static void window_load(Window *window) {
     text_layer_set_text_alignment(s_date_layer, GTextAlignmentCenter);
     layer_add_child(root_layer, text_layer_get_layer(s_date_layer));
 
+    // Phone battery - bottom right corner
+    s_phone_battery_layer = text_layer_create(GRect(PBL_DISPLAY_WIDTH - 40, 145, 40, 20));
+    text_layer_set_background_color(s_phone_battery_layer, GColorClear);
+    text_layer_set_text_color(s_phone_battery_layer, GColorBlack);
+    text_layer_set_font(s_phone_battery_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+    text_layer_set_text_alignment(s_phone_battery_layer, GTextAlignmentRight);
+    layer_add_child(root_layer, text_layer_get_layer(s_phone_battery_layer));
+
     // Initial update
     update_displayed_xdrip_data();
     update_displayed_time_and_date();
     update_displayed_time_ago();
+    update_displayed_phone_battery();
 }
 
 static void window_unload(Window *window) {
@@ -231,6 +252,7 @@ static void window_unload(Window *window) {
     text_layer_destroy(s_time_ago_layer);
     text_layer_destroy(s_time_layer);
     text_layer_destroy(s_date_layer);
+    text_layer_destroy(s_phone_battery_layer);
     bitmap_layer_destroy(s_arrow_layer);
     if (s_arrow_bitmap) {
         gbitmap_destroy(s_arrow_bitmap);
@@ -331,6 +353,13 @@ static void new_xdrip_data_callback(DictionaryIterator *iter, void *context) {
             s_graph_low_line = low_line_tuple->value->uint8;
         }
 
+        // Phone battery
+        Tuple *phone_battery_tuple = dict_find(iter, KEY_PHONE_BATTERY);
+        if (phone_battery_tuple) {
+            s_phone_battery = phone_battery_tuple->value->uint8;
+            update_displayed_phone_battery();
+        }
+
         update_displayed_xdrip_data();
         update_displayed_time_ago();
 
@@ -350,7 +379,7 @@ void send_capability_announcement(void) {
     }
 
     dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
-    dict_write_uint32(iter, KEY_CAPABILITIES, CAP_BG | CAP_TREND_ARROW | CAP_DELTA);
+    dict_write_uint32(iter, KEY_CAPABILITIES, CAP_BG | CAP_TREND_ARROW | CAP_DELTA | CAP_PHONE_BATTERY);
     dict_write_uint8(iter, KEY_GRAPH_HOURS, GRAPH_HOURS);
 
     result = app_message_outbox_send();

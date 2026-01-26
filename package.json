@@ -31,7 +31,8 @@
       "ArrowIndex": 13,
       "GraphData": 14,
       "GraphHighLine": 15,
-      "GraphLowLine": 16
+      "GraphLowLine": 16,
+      "PhoneBattery": 17
     },
     "resources": {
       "media": [

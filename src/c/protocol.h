@@ -18,8 +18,10 @@
 #define KEY_GRAPH_DATA 14      // Byte array: raw graph data
 #define KEY_GRAPH_HIGH_LINE 15 // uint8: high BG threshold in mg/dL / 2
 #define KEY_GRAPH_LOW_LINE 16  // uint8: low BG threshold in mg/dL / 2
+#define KEY_PHONE_BATTERY 17   // uint8: phone battery level (0-100)
 
 // Capability bits (what data the watchface wants to receive)
 #define CAP_BG (1 << 0)
 #define CAP_TREND_ARROW (1 << 1)
 #define CAP_DELTA (1 << 2)
+#define CAP_PHONE_BATTERY (1 << 3)
