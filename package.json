@@ -28,7 +28,10 @@
       "BgTimestamp": 10,
       "BgString": 11,
       "DeltaString": 12,
-      "ArrowIndex": 13
+      "ArrowIndex": 13,
+      "GraphData": 14,
+      "GraphHighLine": 15,
+      "GraphLowLine": 16
     },
     "resources": {
       "media": [
