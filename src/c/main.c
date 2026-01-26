@@ -37,13 +37,13 @@ static char s_date_buffer[11] = "";    // Fits 'Tue 13 Jan'
 
 // Graph config
 #define GRAPH_HOURS 3
-#define MAX_GRAPH_POINTS 300                         // 24 hours @ 5 min intervals = 288
-static uint32_t s_graph_ref_timestamp = 0;           // Reference timestamp (seconds)
-static uint16_t s_graph_count = 0;                   // Number of graph points
-static uint16_t s_graph_offsets[MAX_GRAPH_POINTS];   // Minutes since ref_timestamp (uint16)
-static uint16_t s_graph_bg_values[MAX_GRAPH_POINTS]; // BG values in mg/dL
-static uint16_t s_graph_high_line = 180;             // High BG threshold (mg/dL)
-static uint16_t s_graph_low_line = 72;               // Low BG threshold (mg/dL)
+#define MAX_GRAPH_POINTS 300                       // 24 hours @ 5 min intervals = 288
+static uint32_t s_graph_ref_timestamp = 0;         // Reference timestamp (seconds)
+static uint16_t s_graph_count = 0;                 // Number of graph points
+static uint16_t s_graph_offsets[MAX_GRAPH_POINTS]; // Minutes since ref_timestamp (uint16)
+static uint16_t s_graph_bg_mgdl[MAX_GRAPH_POINTS]; // BG values in mg/dL
+static uint16_t s_graph_high_line_mgdl = 180;      // High BG threshold (mg/dL)
+static uint16_t s_graph_low_line_mgdl = 72;        // Low BG threshold (mg/dL)
 
 // Mapping: Arrow index -> Arrow image resource ID
 static const uint32_t ARROWS[] = {0, // unknown, no arrow
@@ -118,14 +118,16 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     const int height = bounds.size.h;
 
     // Graph parameters
-    const int bg_min = 0;   // mg/dL
-    const int bg_max = 288; // mg/dL (288 mg/dL = 16 mmol/L)
+    const int graph_min_mgdl = 0;
+    const int graph_max_mgdl = 288; // 288 mg/dL = 16 mmol/L
 
     graphics_context_set_fill_color(ctx, GColorBlack);
 
     // Draw high/low threshold lines as thin rectangles
-    const int high_y = height - ((s_graph_high_line - bg_min) * height) / (bg_max - bg_min);
-    const int low_y = height - ((s_graph_low_line - bg_min) * height) / (bg_max - bg_min);
+    const int high_y = height - ((s_graph_high_line_mgdl - graph_min_mgdl) * height) /
+                                    (graph_max_mgdl - graph_min_mgdl);
+    const int low_y = height - ((s_graph_low_line_mgdl - graph_min_mgdl) * height) /
+                                   (graph_max_mgdl - graph_min_mgdl);
     graphics_fill_rect(ctx, GRect(0, high_y, width, 2), 0, GCornerNone);
     graphics_fill_rect(ctx, GRect(0, low_y, width, 2), 0, GCornerNone);
 
@@ -154,8 +156,8 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
         }
 
         // Y position: inverted (high BG at top)
-        const int bg = s_graph_bg_values[i];
-        const int y = height - ((bg - bg_min) * height) / (bg_max - bg_min);
+        const int bg = s_graph_bg_mgdl[i];
+        const int y = height - ((bg - graph_min_mgdl) * height) / (graph_max_mgdl - graph_min_mgdl);
 
         // Draw a dot
         const int dot_size = 3;
@@ -298,14 +300,14 @@ static void new_xdrip_data_callback(DictionaryIterator *iter, void *context) {
 
                 // Parse BG values (multiply by 2 to restore original mg/dL)
                 for (int i = 0; i < s_graph_count; i++) {
-                    s_graph_bg_values[i] = data[6 + (s_graph_count * 2) + i] * 2;
+                    s_graph_bg_mgdl[i] = data[6 + (s_graph_count * 2) + i] * 2;
                 }
 
                 APP_LOG(APP_LOG_LEVEL_INFO, "Received graph: ref_ts=%lu", s_graph_ref_timestamp);
                 APP_LOG(APP_LOG_LEVEL_INFO, "First point: offset=%d min, bg=%d mg/dL",
-                        s_graph_offsets[0], s_graph_bg_values[0]);
+                        s_graph_offsets[0], s_graph_bg_mgdl[0]);
                 APP_LOG(APP_LOG_LEVEL_INFO, "Last point: offset=%d min, bg=%d mg/dL",
-                        s_graph_offsets[s_graph_count - 1], s_graph_bg_values[s_graph_count - 1]);
+                        s_graph_offsets[s_graph_count - 1], s_graph_bg_mgdl[s_graph_count - 1]);
 
                 // Trigger graph redraw
                 if (s_graph_layer) {
@@ -317,14 +319,15 @@ static void new_xdrip_data_callback(DictionaryIterator *iter, void *context) {
         }
 
         // Graph high/low lines
+        // Multiply by 2 to convert from mg/dL / 2 to just mg/dL
         Tuple *high_line_tuple = dict_find(iter, KEY_GRAPH_HIGH_LINE);
         if (high_line_tuple) {
-            s_graph_high_line = high_line_tuple->value->uint16;
+            s_graph_high_line_mgdl = high_line_tuple->value->uint8 * 2;
         }
 
         Tuple *low_line_tuple = dict_find(iter, KEY_GRAPH_LOW_LINE);
         if (low_line_tuple) {
-            s_graph_low_line = low_line_tuple->value->uint16;
+            s_graph_low_line_mgdl = low_line_tuple->value->uint8 * 2;
         }
 
         update_displayed_xdrip_data();
@@ -383,7 +386,7 @@ void init_test_mode_data(void) {
         // Using simple sine-like pattern: 150 + 50*sin(i/6)
         int base_bg = 150;
         int variation = (i % 12) < 6 ? (i % 12) * 8 : (12 - (i % 12)) * 8;
-        s_graph_bg_values[i] = base_bg + variation - 24;
+        s_graph_bg_mgdl[i] = base_bg + variation - 24;
     }
 
     APP_LOG(APP_LOG_LEVEL_INFO, "Test mode: initialized graph with %d points", s_graph_count);

@@ -16,8 +16,8 @@
 #define KEY_DELTA_STRING 12 // Formatted delta, e.g. "+0.3" or "-5"
 #define KEY_ARROW_INDEX 13
 #define KEY_GRAPH_DATA 20      // Byte array: raw graph data
-#define KEY_GRAPH_HIGH_LINE 21 // uint16: high BG threshold in mg/dL
-#define KEY_GRAPH_LOW_LINE 22  // uint16: low BG threshold in mg/dL
+#define KEY_GRAPH_HIGH_LINE 21 // uint8: high BG threshold in mg/dL / 2
+#define KEY_GRAPH_LOW_LINE 22  // uint8: low BG threshold in mg/dL / 2
 
 // Capability bits (what data the watchface wants to receive)
 #define CAP_BG (1 << 0)
