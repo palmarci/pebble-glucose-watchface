@@ -11,29 +11,9 @@
 //
 // Until it gets data, it displays "---" for glucose and nothing for the rest.
 
+#include "protocol.h"
 #include "test_mode.h"
 #include <pebble.h>
-
-#define PROTOCOL_VERSION 1 // Bump for breaking protocol changes
-
-// Message keys: Pebble -> xDrip capability announcement
-#define KEY_PROTOCOL_VERSION 0
-#define KEY_CAPABILITIES 1
-#define KEY_GRAPH_HOURS 2
-
-// Message keys: xDrip -> Pebble watchface data
-#define KEY_BG_TIMESTAMP 10 // UNIX epoch time [seconds]
-#define KEY_BG_STRING 11    // Formatted BG value, e.g. "7.5" or "135"
-#define KEY_DELTA_STRING 12 // Formatted delta, e.g. "+0.3" or "-5"
-#define KEY_ARROW_INDEX 13
-#define KEY_GRAPH_DATA 20      // Byte array: raw graph data
-#define KEY_GRAPH_HIGH_LINE 21 // uint16: high BG threshold in mg/dL
-#define KEY_GRAPH_LOW_LINE 22  // uint16: low BG threshold in mg/dL
-
-// Capability bits (what data the watchface wants to receive)
-#define CAP_BG (1 << 0)
-#define CAP_TREND_ARROW (1 << 1)
-#define CAP_DELTA (1 << 2)
 
 // Layout elements
 static Window *s_window = NULL;
@@ -56,8 +36,8 @@ static char s_time_buffer[6] = "";     // Fits '20:23'
 static char s_date_buffer[11] = "";    // Fits 'Tue 13 Jan'
 
 // Graph data
-#define GRAPH_HOURS 24
-#define MAX_GRAPH_POINTS 300                         // Rounded limit with margin
+#define GRAPH_HOURS 3
+#define MAX_GRAPH_POINTS 300                         // 24 hours @ 5 min intervals = 288
 static uint32_t s_graph_ref_timestamp = 0;           // Reference timestamp (seconds)
 static uint16_t s_graph_count = 0;                   // Number of graph points
 static uint16_t s_graph_offsets[MAX_GRAPH_POINTS];   // Minutes since ref_timestamp (uint16)
@@ -200,7 +180,7 @@ static void window_load(Window *window) {
     Layer *root_layer = window_get_root_layer(window);
 
     // BG value - top, left
-    s_bg_layer = text_layer_create(GRect(0, 0, PBL_DISPLAY_WIDTH - 30 - 10, 42));
+    s_bg_layer = text_layer_create(GRect(0, -6, PBL_DISPLAY_WIDTH - 30 - 10, 42));
     text_layer_set_background_color(s_bg_layer, GColorClear);
     text_layer_set_text_color(s_bg_layer, GColorBlack);
     text_layer_set_font(s_bg_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
@@ -208,12 +188,12 @@ static void window_load(Window *window) {
     layer_add_child(root_layer, text_layer_get_layer(s_bg_layer));
 
     // Arrow - to the right of BG
-    s_arrow_layer = bitmap_layer_create(GRect(PBL_DISPLAY_WIDTH - 30 - 10, 12, 30, 30));
+    s_arrow_layer = bitmap_layer_create(GRect(PBL_DISPLAY_WIDTH - 30 - 6, 12, 30, 30));
     bitmap_layer_set_compositing_mode(s_arrow_layer, GCompOpSet);
     layer_add_child(root_layer, bitmap_layer_get_layer(s_arrow_layer));
 
     // Time ago - below BG, left
-    s_time_ago_layer = text_layer_create(GRect(10, 42, 50, 42));
+    s_time_ago_layer = text_layer_create(GRect(10, 30, 50, 42));
     text_layer_set_background_color(s_time_ago_layer, GColorClear);
     text_layer_set_text_color(s_time_ago_layer, GColorBlack);
     text_layer_set_font(s_time_ago_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
@@ -221,7 +201,7 @@ static void window_load(Window *window) {
     layer_add_child(root_layer, text_layer_get_layer(s_time_ago_layer));
 
     // Delta - below BG, right
-    s_delta_layer = text_layer_create(GRect(PBL_DISPLAY_WIDTH - 50 - 10, 42, 50, 42));
+    s_delta_layer = text_layer_create(GRect(PBL_DISPLAY_WIDTH - 50 - 10, 30, 50, 42));
     text_layer_set_background_color(s_delta_layer, GColorClear);
     text_layer_set_text_color(s_delta_layer, GColorBlack);
     text_layer_set_font(s_delta_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
@@ -312,8 +292,8 @@ static void new_xdrip_data_callback(DictionaryIterator *iter, void *context) {
             s_graph_count = data[4] | (data[5] << 8);
             APP_LOG(APP_LOG_LEVEL_INFO, "Raw count: %d", s_graph_count);
             if (s_graph_count > MAX_GRAPH_POINTS) {
-                APP_LOG(APP_LOG_LEVEL_WARNING, "Count %d exceeds max %d, clamping",
-                        s_graph_count, MAX_GRAPH_POINTS);
+                APP_LOG(APP_LOG_LEVEL_WARNING, "Count %d exceeds max %d, clamping", s_graph_count,
+                        MAX_GRAPH_POINTS);
                 s_graph_count = MAX_GRAPH_POINTS;
             }
 
