@@ -175,7 +175,7 @@ static void window_load(Window *window) {
     layer_add_child(root_layer, text_layer_get_layer(s_bg_layer));
 
     // Arrow - to the right of BG
-    s_arrow_layer = bitmap_layer_create(GRect(PBL_DISPLAY_WIDTH - 30 - 6, 12, 30, 30));
+    s_arrow_layer = bitmap_layer_create(GRect(PBL_DISPLAY_WIDTH - 30 - 12, 6, 30, 30));
     bitmap_layer_set_compositing_mode(s_arrow_layer, GCompOpSet);
     layer_add_child(root_layer, bitmap_layer_get_layer(s_arrow_layer));
 
