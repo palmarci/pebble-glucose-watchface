@@ -35,7 +35,7 @@ static char s_time_ago_buffer[4] = ""; // Fits '99h'
 static char s_time_buffer[6] = "";     // Fits '20:23'
 static char s_date_buffer[11] = "";    // Fits 'Tue 13 Jan'
 
-// Graph data
+// Graph config
 #define GRAPH_HOURS 3
 #define MAX_GRAPH_POINTS 300                         // 24 hours @ 5 min intervals = 288
 static uint32_t s_graph_ref_timestamp = 0;           // Reference timestamp (seconds)
@@ -119,24 +119,15 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
 
     // Graph parameters
     const int bg_min = 0;   // mg/dL
-    const int bg_max = 288; // mg/dL
+    const int bg_max = 288; // mg/dL (288 mg/dL = 16 mmol/L)
 
     graphics_context_set_fill_color(ctx, GColorBlack);
 
-    // Draw high/low threshold lines (2px horizontal lines)
-    int high_y = height - ((s_graph_high_line - bg_min) * height) / (bg_max - bg_min);
-    int low_y = height - ((s_graph_low_line - bg_min) * height) / (bg_max - bg_min);
-
-    // Only draw lines if they're within the visible range
-    // if (high_y >= 0 && high_y <= height) {
+    // Draw high/low threshold lines as thin rectangles
+    const int high_y = height - ((s_graph_high_line - bg_min) * height) / (bg_max - bg_min);
+    const int low_y = height - ((s_graph_low_line - bg_min) * height) / (bg_max - bg_min);
     graphics_fill_rect(ctx, GRect(0, high_y, width, 2), 0, GCornerNone);
-    // graphics_context_set_stroke_width(ctx, 2);
-    // graphics_draw_line(ctx, GPoint(0, high_y), GPoint(width, high_y));
-    // }
-    // if (low_y >= 0 && low_y <= height) {
     graphics_fill_rect(ctx, GRect(0, low_y, width, 2), 0, GCornerNone);
-    // graphics_draw_line(ctx, GPoint(0, low_y), GPoint(width, low_y));
-    // }
 
     const int graph_minutes = GRAPH_HOURS * 60;
     const uint32_t now = time(NULL);
