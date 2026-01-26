@@ -36,14 +36,16 @@ static char s_time_buffer[6] = "";     // Fits '20:23'
 static char s_date_buffer[11] = "";    // Fits 'Tue 13 Jan'
 
 // Graph config
+// All graph BG values are stored in "mg/dL / 2" units (matching wire protocol).
+// This gives 0-510 mg/dL range with 2 mg/dL (0.1 mmol/L) resolution in one byte.
 #define GRAPH_HOURS 3
-#define MAX_GRAPH_POINTS 300                       // 24 hours @ 5 min intervals = 288
-static uint32_t s_graph_ref_timestamp = 0;         // Reference timestamp (seconds)
-static uint16_t s_graph_count = 0;                 // Number of graph points
-static uint16_t s_graph_offsets[MAX_GRAPH_POINTS]; // Minutes since ref_timestamp (uint16)
-static uint16_t s_graph_bg_mgdl[MAX_GRAPH_POINTS]; // BG values in mg/dL
-static uint16_t s_graph_high_line_mgdl = 180;      // High BG threshold (mg/dL)
-static uint16_t s_graph_low_line_mgdl = 72;        // Low BG threshold (mg/dL)
+#define MAX_GRAPH_POINTS 300                        // 24 hours @ 5 min intervals = 288
+static uint32_t s_graph_ref_timestamp = 0;          // Reference timestamp (seconds)
+static uint16_t s_graph_count = 0;                  // Number of graph points
+static uint16_t s_graph_offsets[MAX_GRAPH_POINTS];  // Minutes since ref_timestamp
+static uint8_t s_graph_bg_values[MAX_GRAPH_POINTS]; // BG values (mg/dL / 2)
+static uint8_t s_graph_high_line = 90;              // High threshold (mg/dL / 2) = 180 mg/dL
+static uint8_t s_graph_low_line = 36;               // Low threshold (mg/dL / 2) = 72 mg/dL
 
 // Mapping: Arrow index -> Arrow image resource ID
 static const uint32_t ARROWS[] = {0, // unknown, no arrow
@@ -117,17 +119,16 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     const int width = bounds.size.w;
     const int height = bounds.size.h;
 
-    // Graph parameters
-    const int graph_min_mgdl = 0;
-    const int graph_max_mgdl = 288; // 288 mg/dL = 16 mmol/L
+    // Graph parameters (all in "mg/dL / 2" units)
+    const int graph_min = 0;   // 0 mg/dL
+    const int graph_max = 144; // 288 mg/dL = 16 mmol/L
 
     graphics_context_set_fill_color(ctx, GColorBlack);
 
     // Draw high/low threshold lines as thin rectangles
-    const int high_y = height - ((s_graph_high_line_mgdl - graph_min_mgdl) * height) /
-                                    (graph_max_mgdl - graph_min_mgdl);
-    const int low_y = height - ((s_graph_low_line_mgdl - graph_min_mgdl) * height) /
-                                   (graph_max_mgdl - graph_min_mgdl);
+    const int high_y =
+        height - ((s_graph_high_line - graph_min) * height) / (graph_max - graph_min);
+    const int low_y = height - ((s_graph_low_line - graph_min) * height) / (graph_max - graph_min);
     graphics_fill_rect(ctx, GRect(0, high_y, width, 2), 0, GCornerNone);
     graphics_fill_rect(ctx, GRect(0, low_y, width, 2), 0, GCornerNone);
 
@@ -156,8 +157,8 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
         }
 
         // Y position: inverted (high BG at top)
-        const int bg = s_graph_bg_mgdl[i];
-        const int y = height - ((bg - graph_min_mgdl) * height) / (graph_max_mgdl - graph_min_mgdl);
+        const int bg = s_graph_bg_values[i];
+        const int y = height - ((bg - graph_min) * height) / (graph_max - graph_min);
 
         // Draw a dot
         const int dot_size = 3;
@@ -298,16 +299,17 @@ static void new_xdrip_data_callback(DictionaryIterator *iter, void *context) {
                     s_graph_offsets[i] = data[offset_idx] | (data[offset_idx + 1] << 8);
                 }
 
-                // Parse BG values (multiply by 2 to restore original mg/dL)
+                // Parse BG values in "mg/dL / 2" units
                 for (int i = 0; i < s_graph_count; i++) {
-                    s_graph_bg_mgdl[i] = data[6 + (s_graph_count * 2) + i] * 2;
+                    s_graph_bg_values[i] = data[6 + (s_graph_count * 2) + i];
                 }
 
                 APP_LOG(APP_LOG_LEVEL_INFO, "Received graph: ref_ts=%lu", s_graph_ref_timestamp);
                 APP_LOG(APP_LOG_LEVEL_INFO, "First point: offset=%d min, bg=%d mg/dL",
-                        s_graph_offsets[0], s_graph_bg_mgdl[0]);
+                        s_graph_offsets[0], s_graph_bg_values[0] * 2);
                 APP_LOG(APP_LOG_LEVEL_INFO, "Last point: offset=%d min, bg=%d mg/dL",
-                        s_graph_offsets[s_graph_count - 1], s_graph_bg_mgdl[s_graph_count - 1]);
+                        s_graph_offsets[s_graph_count - 1],
+                        s_graph_bg_values[s_graph_count - 1] * 2);
 
                 // Trigger graph redraw
                 if (s_graph_layer) {
@@ -318,16 +320,15 @@ static void new_xdrip_data_callback(DictionaryIterator *iter, void *context) {
             }
         }
 
-        // Graph high/low lines
-        // Multiply by 2 to convert from mg/dL / 2 to just mg/dL
+        // Graph high/low lines (stored as mg/dL / 2)
         Tuple *high_line_tuple = dict_find(iter, KEY_GRAPH_HIGH_LINE);
         if (high_line_tuple) {
-            s_graph_high_line_mgdl = high_line_tuple->value->uint8 * 2;
+            s_graph_high_line = high_line_tuple->value->uint8;
         }
 
         Tuple *low_line_tuple = dict_find(iter, KEY_GRAPH_LOW_LINE);
         if (low_line_tuple) {
-            s_graph_low_line_mgdl = low_line_tuple->value->uint8 * 2;
+            s_graph_low_line = low_line_tuple->value->uint8;
         }
 
         update_displayed_xdrip_data();
@@ -382,11 +383,11 @@ void init_test_mode_data(void) {
         // Offsets: 0, 5, 10, 15, ... 175 minutes
         s_graph_offsets[i] = i * 5;
 
-        // BG values: create a wave pattern between 100-200 mg/dL
+        // BG values: create a wave pattern between 100-200 mg/dL (stored as mg/dL / 2)
         // Using simple sine-like pattern: 150 + 50*sin(i/6)
         int base_bg = 150;
         int variation = (i % 12) < 6 ? (i % 12) * 8 : (12 - (i % 12)) * 8;
-        s_graph_bg_mgdl[i] = base_bg + variation - 24;
+        s_graph_bg_values[i] = (base_bg + variation - 24) / 2;
     }
 
     APP_LOG(APP_LOG_LEVEL_INFO, "Test mode: initialized graph with %d points", s_graph_count);
