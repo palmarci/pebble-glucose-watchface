@@ -167,7 +167,8 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
         const int y = height - ((bg - bg_min) * height) / (bg_max - bg_min);
 
         // Draw a dot
-        graphics_fill_rect(ctx, GRect(x - 1, y - 1, 3, 3), 0, GCornerNone);
+        const int dot_size = 3;
+        graphics_fill_rect(ctx, GRect(x - 1, y - 1, dot_size, dot_size), 0, GCornerNone);
     }
 }
 
