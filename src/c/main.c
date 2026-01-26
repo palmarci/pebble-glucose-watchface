@@ -118,7 +118,6 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     const int height = bounds.size.h;
 
     // Graph parameters
-
     const int bg_min = 0;   // mg/dL
     const int bg_max = 288; // mg/dL
 
@@ -164,12 +163,8 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
         }
 
         // Y position: inverted (high BG at top)
-        int bg = s_graph_bg_values[i];
-        if (bg < bg_min)
-            bg = bg_min;
-        if (bg > bg_max)
-            bg = bg_max;
-        int y = height - ((bg - bg_min) * height) / (bg_max - bg_min);
+        const int bg = s_graph_bg_values[i];
+        const int y = height - ((bg - bg_min) * height) / (bg_max - bg_min);
 
         // Draw a dot
         graphics_fill_rect(ctx, GRect(x - 1, y - 1, 3, 3), 0, GCornerNone);
