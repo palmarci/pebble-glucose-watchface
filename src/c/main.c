@@ -135,6 +135,10 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     const int graph_minutes = GRAPH_HOURS * 60;
     const uint32_t now = time(NULL);
 
+    int prev_x = 0;
+    int prev_y = 0;
+    graphics_context_set_stroke_width(ctx, 3);
+
     // Draw each point as a dot
     for (int i = 0; i < s_graph_count; i++) {
         // Calculate absolute timestamp of this point
@@ -152,9 +156,9 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
         int x = width - ((minutes_ago * width) / graph_minutes);
 
         // Skip points that would be off-screen (negative x or too far right)
-        if (x < 0 || x >= width) {
-            continue;
-        }
+        // if (x < 0 || x >= width) {
+        //     continue;
+        // }
 
         // Y position: inverted (high BG at top)
         const int bg = s_graph_bg_values[i];
@@ -162,7 +166,15 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
 
         // Draw a dot
         const int dot_size = 3;
-        graphics_fill_rect(ctx, GRect(x - 1, y - 1, dot_size, dot_size), 0, GCornerNone);
+        // graphics_fill_rect(ctx, GRect(x - 1, y - 1, dot_size, dot_size), 0, GCornerNone);
+
+        // ......and a cheeky line?
+        if (i > 0) {
+            graphics_draw_line(ctx, GPoint(prev_x, prev_y), GPoint(x, y));
+        }
+
+        prev_x = x;
+        prev_y = y;
     }
 }
 
