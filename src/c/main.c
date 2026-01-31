@@ -90,47 +90,6 @@ static void update_displayed_time_and_date(void) {
     text_layer_set_text(s_date_layer, s_date_buffer);
 }
 
-#if 0
-static void draw_arrow_head(GContext *ctx, GPoint tip, int dx, int dy, int size) {
-    // Draw a triangular arrowhead at the tip pointing in the direction of (dx, dy)
-    // We calculate perpendicular vectors to create the arrowhead base
-
-    // Normalize the direction vector (approximate, using integer math)
-    int len_sq = dx * dx + dy * dy;
-    if (len_sq == 0)
-        return;
-
-    // Create perpendicular vector (-dy, dx) for the arrowhead sides
-    // Scale down for the arrowhead size
-    int perp_x = (-dy * size) / 10;
-    int perp_y = (dx * size) / 10;
-
-    // Back vector: opposite of direction
-    int back_x = (-dx * size) / 10;
-    int back_y = (-dy * size) / 10;
-
-    // Calculate the two base points of the triangle
-    GPoint points[3];
-    points[0] = tip;
-    points[1].x = tip.x + back_x + perp_x;
-    points[1].y = tip.y + back_y + perp_y;
-    points[2].x = tip.x + back_x - perp_x;
-    points[2].y = tip.y + back_y - perp_y;
-
-    // Draw filled triangle
-    graphics_context_set_fill_color(ctx, GColorBlack);
-    GPathInfo arrow_path_info = {.num_points = 3, .points = points};
-    GPath *arrow_path = gpath_create(&arrow_path_info);
-    gpath_draw_filled(ctx, arrow_path);
-    gpath_destroy(arrow_path);
-}
-#endif
-
-// static void graphics_draw_dotted_line(GContext *ctx, GPoint p0, GPoint p1) {
-// graphics_draw_line(ctx, p0, p1);
-// just draw
-// }
-
 static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     if (s_graph_count == 0) {
         return; // No data to display
@@ -161,10 +120,8 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
 
     int prev_x = 0;
     int prev_y = 0;
-    int last_x = 0;
-    int last_y = 0;
-    int second_last_x = 0;
-    int second_last_y = 0;
+    int prev_prev_x = 0;
+    int prev_prev_y = 0;
     int visible_count = 0;
 
     graphics_context_set_stroke_width(ctx, 3);
@@ -196,11 +153,11 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
 
         // Track last two points for arrow calculation
         if (visible_count > 0) {
-            second_last_x = last_x;
-            second_last_y = last_y;
+            prev_prev_x = prev_x;
+            prev_prev_y = prev_y;
         }
-        last_x = x;
-        last_y = y;
+        prev_x = x;
+        prev_y = y;
 
         prev_x = x;
         prev_y = y;
@@ -210,17 +167,17 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     // Draw a bigger dot at the most recent point
     if (visible_count > 0) {
         const int dot_radius = 4;
-        // graphics_fill_circle(ctx, GPoint(last_x, last_y), dot_radius);
+        // graphics_fill_circle(ctx, GPoint(prev_x, prev_y), dot_radius);
     }
 
     // Draw dynamic arrow extending from the most recent point
     if (visible_count >= 2) {
         // Calculate slope from second-to-last to last point
-        int dx = last_x - second_last_x;
-        int dy = last_y - second_last_y;
+        int dx = prev_x - prev_prev_x;
+        int dy = prev_y - prev_prev_y;
 
         APP_LOG(APP_LOG_LEVEL_DEBUG, "Arrow: visible=%d, dx=%d, dy=%d, last=(%d,%d)", visible_count,
-                dx, dy, last_x, last_y);
+                dx, dy, prev_x, prev_y);
 
         // Only draw arrow if we have a valid slope
         if (dx != 0 || dy != 0) {
@@ -241,7 +198,7 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
             int arrow_dy = (dy * arrow_length) / approx_len;
 
             // Calculate arrow end point
-            GPoint arrow_end = {.x = last_x + arrow_dx, .y = last_y + arrow_dy};
+            GPoint arrow_end = {.x = prev_x + arrow_dx, .y = prev_y + arrow_dy};
 
             APP_LOG(APP_LOG_LEVEL_DEBUG, "Drawing arrow to (%d,%d), arrow_d=(%d,%d)", arrow_end.x,
                     arrow_end.y, arrow_dx, arrow_dy);
@@ -252,6 +209,9 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
             // so that's uh display_width/6
             // use that like this " . . ." (space dot x3)
             // that means dot spacing is... (1/6)/3
+
+            // TODO not constant dx, but constant total length instead
+
             const int num_dots = 3;
             const int dot_dx = PBL_DISPLAY_WIDTH / (8 * num_dots);
             const int dot_dy = dot_dx * dy / dx;
@@ -267,7 +227,7 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
             }
 
             // Draw arrow line
-            // graphics_draw_dotted_line(ctx, GPoint(last_x, last_y), arrow_end);
+            // graphics_draw_dotted_line(ctx, GPoint(prev_x, prev_y), arrow_end);
 
             // Draw arrowhead
             // draw_arrow_head(ctx, arrow_end, arrow_dx, arrow_dy, 4);
