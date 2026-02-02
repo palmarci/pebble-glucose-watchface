@@ -135,7 +135,7 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
         int minutes_ago = (now - point_timestamp) / 60;
 
         // Skip points that are too old (off the left edge)
-        if (minutes_ago > graph_minutes) {
+        if (minutes_ago > graph_minutes + 5) {
             continue;
         }
 
