@@ -252,8 +252,8 @@ static void window_load(Window *window) {
     text_layer_set_text_alignment(s_bg_layer, GTextAlignmentCenter);
     layer_add_child(root_layer, text_layer_get_layer(s_bg_layer));
 
-    // Time ago - below BG, left
-    s_time_ago_layer = text_layer_create(GRect(10, 30, 50, 42));
+    // Time ago - to the left of BG
+    s_time_ago_layer = text_layer_create(GRect(4, 4, 40, 24));
     text_layer_set_background_color(s_time_ago_layer, GColorClear);
     text_layer_set_text_color(s_time_ago_layer, GColorBlack);
     text_layer_set_font(s_time_ago_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
