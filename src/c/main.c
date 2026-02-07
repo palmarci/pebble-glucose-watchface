@@ -6,7 +6,6 @@
 //   - blood glucose
 //   - 2-hour graph with dynamic trend arrow
 //   - time ago (time since BG reading)
-//   - BG delta
 //   - time and date
 //
 // Until it gets data, it displays "---" for glucose and nothing for the rest.
@@ -18,7 +17,6 @@
 // Layout elements
 static Window *s_window = NULL;
 static TextLayer *s_bg_layer = NULL;
-static TextLayer *s_delta_layer = NULL;
 static TextLayer *s_time_ago_layer = NULL;
 static TextLayer *s_time_layer = NULL;
 static TextLayer *s_date_layer = NULL;
@@ -27,7 +25,6 @@ static Layer *s_graph_layer = NULL;
 // Watchface data
 static uint32_t s_bg_timestamp = 0;    // Seconds since epoch
 static char s_bg_string[5] = "---";    // Fits '10.0'
-static char s_delta_string[6] = "";    // Fits '+0.06'
 static char s_time_ago_buffer[4] = ""; // Fits '99h'
 static char s_time_buffer[6] = "";     // Fits '20:23'
 static char s_date_buffer[11] = "";    // Fits 'Tue 13 Jan'
@@ -72,9 +69,6 @@ static void update_displayed_time_ago(void) {
 static void update_displayed_xdrip_data(void) {
     // Update displayed BG value
     text_layer_set_text(s_bg_layer, s_bg_string);
-
-    // Update displayed delta value
-    text_layer_set_text(s_delta_layer, s_delta_string);
 
     // Redraw graph (which includes the dynamic arrow)
     if (s_graph_layer) {
@@ -260,14 +254,6 @@ static void window_load(Window *window) {
     text_layer_set_text_alignment(s_time_ago_layer, GTextAlignmentLeft);
     layer_add_child(root_layer, text_layer_get_layer(s_time_ago_layer));
 
-    // Delta - below BG, right
-    s_delta_layer = text_layer_create(GRect(PBL_DISPLAY_WIDTH - 50 - 10, 30, 50, 42));
-    text_layer_set_background_color(s_delta_layer, GColorClear);
-    text_layer_set_text_color(s_delta_layer, GColorBlack);
-    text_layer_set_font(s_delta_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
-    text_layer_set_text_alignment(s_delta_layer, GTextAlignmentRight);
-    // layer_add_child(root_layer, text_layer_get_layer(s_delta_layer));
-
     // Graph - positioned from left edge to 2/3 of screen, plus arrow space
     const int graph_width = (PBL_DISPLAY_WIDTH * 2) / 3;
     const int arrow_space = PBL_DISPLAY_WIDTH - graph_width; // Remaining 1/3 for arrow
@@ -299,7 +285,6 @@ static void window_load(Window *window) {
 
 static void window_unload(Window *window) {
     text_layer_destroy(s_bg_layer);
-    text_layer_destroy(s_delta_layer);
     text_layer_destroy(s_time_ago_layer);
     text_layer_destroy(s_time_layer);
     text_layer_destroy(s_date_layer);
@@ -324,12 +309,6 @@ static void new_xdrip_data_callback(DictionaryIterator *iter, void *context) {
         Tuple *bg_tuple = dict_find(iter, KEY_BG_STRING);
         if (bg_tuple) {
             safe_strncpy(s_bg_string, bg_tuple->value->cstring, sizeof(s_bg_string));
-        }
-
-        // Delta as string
-        Tuple *delta_tuple = dict_find(iter, KEY_DELTA_STRING);
-        if (delta_tuple) {
-            safe_strncpy(s_delta_string, delta_tuple->value->cstring, sizeof(s_delta_string));
         }
 
         // Graph data
@@ -396,7 +375,7 @@ static void new_xdrip_data_callback(DictionaryIterator *iter, void *context) {
         update_displayed_xdrip_data();
         update_displayed_time_ago();
 
-        APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s, delta: %s", s_bg_string, s_delta_string);
+        APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s", s_bg_string);
     }
 }
 
@@ -411,7 +390,7 @@ void send_capability_announcement(void) {
     }
 
     dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
-    dict_write_uint32(iter, KEY_CAPABILITIES, CAP_BG | CAP_TREND_ARROW | CAP_DELTA);
+    dict_write_uint32(iter, KEY_CAPABILITIES, CAP_BG | CAP_TREND_ARROW);
     dict_write_uint8(iter, KEY_GRAPH_HOURS, GRAPH_HOURS);
 
     result = app_message_outbox_send();
@@ -433,7 +412,6 @@ void init_test_mode_data(void) {
 #ifdef TEST_MODE
     s_bg_timestamp = time(NULL) - TEST_MINUTES_AGO * 60;
     safe_strncpy(s_bg_string, TEST_BG_STRING, sizeof(s_bg_string));
-    safe_strncpy(s_delta_string, TEST_DELTA_STRING, sizeof(s_delta_string));
 
     // Initialize test graph data
     s_graph_ref_timestamp = time(NULL) - (GRAPH_HOURS * 60 * 60);
