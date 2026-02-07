@@ -162,16 +162,7 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
         }
         prev_x = x;
         prev_y = y;
-
-        prev_x = x;
-        prev_y = y;
         visible_count++;
-    }
-
-    // Draw a bigger dot at the most recent point
-    if (visible_count > 0) {
-        const int dot_radius = 4;
-        // graphics_fill_circle(ctx, GPoint(prev_x, prev_y), dot_radius);
     }
 
     // Draw dynamic arrow extending from the most recent point
