@@ -133,10 +133,10 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     // Draw graph line
     for (int i = 0; i < s_graph_count; i++) {
         // Calculate absolute timestamp of this point
-        uint32_t point_timestamp = s_graph_ref_timestamp + (s_graph_offsets[i] * 60);
+        const uint32_t point_timestamp = s_graph_ref_timestamp + (s_graph_offsets[i] * 60);
 
         // Calculate how many minutes ago this point was from now
-        int minutes_ago = (now - point_timestamp) / 60;
+        const int minutes_ago = (now - point_timestamp) / 60;
 
         // Skip points that are too old (off the left edge)
         if (minutes_ago > graph_minutes + 5) {
@@ -144,7 +144,7 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
         }
 
         // X position: right edge = now (0 min ago), left edge = graph_minutes ago
-        int x = graph_width - ((minutes_ago * graph_width) / graph_minutes);
+        const int x = graph_width - ((minutes_ago * graph_width) / graph_minutes);
 
         // Y position: inverted (high BG at top)
         const int bg = s_graph_bg_values[i];
