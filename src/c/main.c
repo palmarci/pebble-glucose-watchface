@@ -59,7 +59,9 @@ static void update_displayed_time_ago(void) {
     }
 
     const int minutes_ago = (time(NULL) - s_bg_timestamp) / 60;
-    if (minutes_ago < 60) {
+    if (minutes_ago < 6) {
+        s_time_ago_buffer[0] = '\0';
+    } else if (minutes_ago < 60) {
         snprintf(s_time_ago_buffer, sizeof(s_time_ago_buffer), "%dm", minutes_ago);
     } else {
         snprintf(s_time_ago_buffer, sizeof(s_time_ago_buffer), "%dh", minutes_ago / 60);
