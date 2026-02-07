@@ -88,7 +88,7 @@ static void update_displayed_time_and_date(void) {
     strftime(s_time_buffer, sizeof(s_time_buffer), clock_is_24h_style() ? "%H:%M" : "%I:%M",
              tick_time);
     text_layer_set_text(s_time_layer, s_time_buffer);
-    strftime(s_date_buffer, sizeof(s_date_buffer), "%a %d %b", tick_time);
+    strftime(s_date_buffer, sizeof(s_date_buffer), "%a %d", tick_time);
     text_layer_set_text(s_date_layer, s_date_buffer);
 }
 
