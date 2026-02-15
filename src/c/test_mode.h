@@ -4,7 +4,7 @@
 #pragma once
 
 // Uncomment to enable test mode
-#define TEST_MODE
+// #define TEST_MODE
 
 #define TEST_BG_STRING "10.2"
 #define TEST_DELTA_STRING "+0.3"

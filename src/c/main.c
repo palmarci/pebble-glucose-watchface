@@ -86,45 +86,43 @@ static void update_displayed_time_and_date(void) {
     text_layer_set_text(s_date_layer, s_date_buffer);
 }
 
-// TODO split this into functions
-// TODO rename function?
-static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
-    if (s_graph_count == 0) {
-        return; // No data to display
-    }
+struct GraphParams {
+    // Layer size (pixels)
+    int16_t layer_width;
+    int16_t layer_height;
+    // BG graph size (pixels)
+    int16_t graph_width;
+    // BG boundary values ("mg/dl/2" units, fits in uint8)
+    uint8_t value_min;
+    uint8_t value_max;
+};
 
-    const GRect bounds = layer_get_bounds(layer);
-    const int width = bounds.size.w;
-    const int height = bounds.size.h;
-
-    // Graph data width (2/3 of screen), not including arrow space
-    const int graph_width = (PBL_DISPLAY_WIDTH * 2) / 3;
-
-    // Graph parameters (all in "mg/dL / 2" units)
-    const int graph_min = 0;   // 0 mg/dL
-    const int graph_max = 144; // 288 mg/dL = 16 mmol/L
-
+// Draw high/low threshold lines as thin rectangles (across full width)
+static void draw_high_low_lines(GContext *ctx, const struct GraphParams p) {
     graphics_context_set_fill_color(ctx, GColorBlack);
 
-    // Draw high/low threshold lines as thin rectangles (across full width)
-    const int high_y =
-        height - ((s_graph_high_line - graph_min) * height) / (graph_max - graph_min);
-    const int low_y = height - ((s_graph_low_line - graph_min) * height) / (graph_max - graph_min);
-    graphics_fill_rect(ctx, GRect(0, high_y, width, 2), 0, GCornerNone);
-    graphics_fill_rect(ctx, GRect(0, low_y, width, 2), 0, GCornerNone);
+    const int high_y = p.layer_height - ((s_graph_high_line - p.value_min) * p.layer_height) /
+                                            (p.value_max - p.value_min);
+    const int low_y = p.layer_height - ((s_graph_low_line - p.value_min) * p.layer_height) /
+                                           (p.value_max - p.value_min);
 
-    const int graph_minutes = GRAPH_HOURS * 60;
-    const uint32_t now = time(NULL);
+    const int line_width = 2;
 
-    int prev_x = 0;
-    int prev_y = 0;
-    int prev_prev_x = 0;
-    int prev_prev_y = 0;
-    int visible_count = 0;
+    graphics_fill_rect(ctx, GRect(0, high_y, p.layer_width, line_width), 0, GCornerNone);
+    graphics_fill_rect(ctx, GRect(0, low_y, p.layer_width, line_width), 0, GCornerNone);
+}
+
+static void draw_bg_graph_line(GContext *ctx, const struct GraphParams p) {
 
     graphics_context_set_stroke_width(ctx, 3);
 
-    // Draw graph line
+    const uint32_t now = time(NULL);
+    const int graph_minutes = GRAPH_HOURS * 60;
+
+    // TODO datatype?
+    int prev_x = 0;
+    int prev_y = 0;
+
     for (int i = 0; i < s_graph_count; i++) {
         // Calculate absolute timestamp of this point
         const uint32_t point_timestamp = s_graph_ref_timestamp + (s_graph_offsets[i] * 60);
@@ -137,93 +135,150 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
             continue;
         }
 
-        // X position: right edge = now (0 min ago), left edge = graph_minutes ago
-        const int x = graph_width - ((minutes_ago * graph_width) / graph_minutes);
+        // X position: right edge = 0 min ago, left edge = graph_minutes ago
+        const int x = p.graph_width - ((minutes_ago * p.graph_width) / graph_minutes);
 
         // Y position: inverted (high BG at top)
-        const int bg = s_graph_bg_values[i];
-        const int y = height - ((bg - graph_min) * height) / (graph_max - graph_min);
+        const int y = p.layer_height - ((s_graph_bg_values[i] - p.value_min) * p.layer_height) /
+                                           (p.value_max - p.value_min);
 
-        // Draw line connecting to previous point
-        if (visible_count > 0) { // TODO this if should be more clear, some sort of if prev point
-                                 // exists and dt is small enough
+        // Need two points to draw a line, so skip first point
+        if (i > 0) {
+            // Draw line connecting to previous point
             graphics_draw_line(ctx, GPoint(prev_x, prev_y), GPoint(x, y));
         }
 
-        // Draw dot
-        // graphics_fill_circle(ctx, GPoint(x, y), 2);
-        // graphics_draw_rect(ctx, GRect(x - 1, y - 1, 3, 3));
-
-        // Track last two points for arrow calculation
-        // TODO why not just use current and prev???
-        if (visible_count > 0) {
-            prev_prev_x = prev_x;
-            prev_prev_y = prev_y;
-        }
         prev_x = x;
         prev_y = y;
-        visible_count++;
+    }
+}
+
+// Draw dynamic arrow extending from the most recent point
+static void draw_bg_prediction_line(GContext *ctx, const struct GraphParams p) {
+
+    // Need at least two points to extrapolate
+    if (s_graph_count < 2) {
+        return;
     }
 
-    // Draw dynamic arrow extending from the most recent point
-    if (visible_count >= 2) {
-        // Calculate slope from second-to-last to last point
-        int dx = prev_x - prev_prev_x;
-        int dy = prev_y - prev_prev_y;
+    // TODO deal with the two points being too far apart (should use same logic as gap logic in main
+    // bg graph)
 
-        APP_LOG(APP_LOG_LEVEL_DEBUG, "Arrow: visible=%d, dx=%d, dy=%d, last=(%d,%d)", visible_count,
-                dx, dy, prev_x, prev_y);
+    // TODO deduplicate this stuff
+    const uint32_t now = time(NULL);
+    const int graph_minutes = GRAPH_HOURS * 60;
 
-        // Only draw arrow if we have a valid slope
-        if (dx != 0 || dy != 0) {
-            // Arrow length: 25 pixels
-            const int arrow_length = 25;
+    int x = 0;
+    int y = 0;
+    int prev_x = 0;
+    int prev_y = 0;
+    int i = 0;
 
-            // Calculate length of the direction vector (approximate with integer math)
-            // We'll use a simple approximation: max(|dx|, |dy|) + min(|dx|, |dy|)/2
-            int abs_dx = dx > 0 ? dx : -dx;
-            int abs_dy = dy > 0 ? dy : -dy;
-            int approx_len = (abs_dx > abs_dy) ? abs_dx + abs_dy / 2 : abs_dy + abs_dx / 2;
+    {
+        i = s_graph_count - 2;
 
-            if (approx_len == 0)
-                approx_len = 1; // Avoid division by zero
+        const uint32_t point_timestamp = s_graph_ref_timestamp + (s_graph_offsets[i] * 60);
+        const int minutes_ago = (now - point_timestamp) / 60;
 
-            // Scale the direction vector to arrow_length
-            int arrow_dx = (dx * arrow_length) / approx_len;
-            int arrow_dy = (dy * arrow_length) / approx_len;
+        prev_x = p.graph_width - ((minutes_ago * p.graph_width) / graph_minutes);
+        prev_y = p.layer_height - ((s_graph_bg_values[i] - p.value_min) * p.layer_height) /
+                                      (p.value_max - p.value_min);
+    }
 
-            // Calculate arrow end point
-            GPoint arrow_end = {.x = prev_x + arrow_dx, .y = prev_y + arrow_dy};
+    {
+        i = s_graph_count - 1;
 
-            APP_LOG(APP_LOG_LEVEL_DEBUG, "Drawing arrow to (%d,%d), arrow_d=(%d,%d)", arrow_end.x,
-                    arrow_end.y, arrow_dx, arrow_dy);
+        const uint32_t point_timestamp = s_graph_ref_timestamp + (s_graph_offsets[i] * 60);
+        const int minutes_ago = (now - point_timestamp) / 60;
 
-            // ok draw some dots towards arrow_end
-            // we have 1/3 of the screen for it
-            // maybe use 1/6th?
-            // so that's uh display_width/6
-            // use that like this " . . ." (space dot x3)
-            // that means dot spacing is... (1/6)/3
+        x = p.graph_width - ((minutes_ago * p.graph_width) / graph_minutes);
+        y = p.layer_height -
+            ((s_graph_bg_values[i] - p.value_min) * p.layer_height) / (p.value_max - p.value_min);
+    }
 
-            // TODO not constant dx, but constant total length instead
+    // const int i = s_graph_count - 1;
+    // const int i_prev = s_graph_count - 2;
 
-            const int num_dots = 3;
-            const int dot_dx = PBL_DISPLAY_WIDTH / (8 * num_dots);
-            const int dot_dy = dot_dx * dy / dx;
-            int dot_x = prev_x;
-            int dot_y = prev_y;
-            for (int i = 0; i < num_dots; ++i) {
-                dot_x += dot_dx;
-                dot_y += dot_dy;
-                // graphics_fill_circle(ctx, GPoint(dot_x, dot_y), 2);
-                // graphics_fill_circle(ctx, GPoint(dot_x, dot_y + 10), 1);
+    // Calculate slope from second-to-last to last point
+    int dx = x - prev_x;
+    int dy = y - prev_y;
 
-                graphics_draw_rect(ctx, GRect(dot_x, dot_y, 2, 2));
-            }
+    // APP_LOG(APP_LOG_LEVEL_DEBUG, "Arrow: visible=%d, dx=%d, dy=%d, last=(%d,%d)", visible_count,
+    // dx, dy, prev_x, prev_y);
+
+    // Only draw arrow if we have a valid slope
+    if (dx != 0 || dy != 0) {
+        // Arrow length: 25 pixels
+        const int arrow_length = 25;
+
+        // Calculate length of the direction vector (approximate with integer math)
+        // We'll use a simple approximation: max(|dx|, |dy|) + min(|dx|, |dy|)/2
+        int abs_dx = dx > 0 ? dx : -dx;
+        int abs_dy = dy > 0 ? dy : -dy;
+        int approx_len = (abs_dx > abs_dy) ? abs_dx + abs_dy / 2 : abs_dy + abs_dx / 2;
+
+        if (approx_len == 0)
+            approx_len = 1; // Avoid division by zero
+
+        // Scale the direction vector to arrow_length
+        int arrow_dx = (dx * arrow_length) / approx_len;
+        int arrow_dy = (dy * arrow_length) / approx_len;
+
+        // Calculate arrow end point
+        GPoint arrow_end = {.x = prev_x + arrow_dx, .y = prev_y + arrow_dy};
+
+        APP_LOG(APP_LOG_LEVEL_DEBUG, "Drawing arrow to (%d,%d), arrow_d=(%d,%d)", arrow_end.x,
+                arrow_end.y, arrow_dx, arrow_dy);
+
+        // ok draw some dots towards arrow_end
+        // we have 1/3 of the screen for it
+        // maybe use 1/6th?
+        // so that's uh display_width/6
+        // use that like this " . . ." (space dot x3)
+        // that means dot spacing is... (1/6)/3
+
+        // TODO not constant dx, but constant total length instead
+
+        const int num_dots = 3;
+        const int dot_dx = PBL_DISPLAY_WIDTH / (8 * num_dots);
+        const int dot_dy = dot_dx * dy / dx;
+        int dot_x = prev_x;
+        int dot_y = prev_y;
+        for (int i = 0; i < num_dots; ++i) {
+            dot_x += dot_dx;
+            dot_y += dot_dy;
+            // graphics_fill_circle(ctx, GPoint(dot_x, dot_y), 2);
+            // graphics_fill_circle(ctx, GPoint(dot_x, dot_y + 10), 1);
+
+            graphics_draw_rect(ctx, GRect(dot_x, dot_y, 2, 2));
         }
-    } else {
-        APP_LOG(APP_LOG_LEVEL_DEBUG, "Arrow: not enough points, visible=%d", visible_count);
     }
+    // }
+    // else {
+    // APP_LOG(APP_LOG_LEVEL_DEBUG, "Arrow: not enough points, visible=%d", visible_count);
+    // }
+}
+
+// TODO split this into functions
+// TODO rename function?
+static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
+    if (s_graph_count == 0) {
+        return; // No data to display
+    }
+
+    const GRect bounds = layer_get_bounds(layer);
+
+    const struct GraphParams graph_params = {
+        .layer_width = bounds.size.w,
+        .layer_height = bounds.size.h,
+        .graph_width = bounds.size.w * 2 / 3, // Left 2/3 of screen
+        .value_min = 0,                       // 0 mg/dL
+        .value_max = 144,                     // 288 mg/dL = 16 mmol/L
+    };
+
+    draw_high_low_lines(ctx, graph_params);
+    draw_bg_graph_line(ctx, graph_params);
+    draw_bg_prediction_line(ctx, graph_params);
 }
 
 static void window_load(Window *window) {
@@ -245,10 +300,8 @@ static void window_load(Window *window) {
     text_layer_set_text_alignment(s_time_ago_layer, GTextAlignmentLeft);
     layer_add_child(root_layer, text_layer_get_layer(s_time_ago_layer));
 
-    // Graph - positioned from left edge to 2/3 of screen, plus arrow space
-    const int graph_width = (PBL_DISPLAY_WIDTH * 2) / 3;
-    const int arrow_space = PBL_DISPLAY_WIDTH - graph_width; // Remaining 1/3 for arrow
-    s_graph_layer = layer_create(GRect(0, 35, graph_width + arrow_space, 100));
+    // Graph - middle, full screen width
+    s_graph_layer = layer_create(GRect(0, 35, PBL_DISPLAY_WIDTH, 100));
     layer_set_update_proc(s_graph_layer, graph_layer_update_proc);
     layer_add_child(root_layer, s_graph_layer);
 

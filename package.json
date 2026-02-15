@@ -11,11 +11,6 @@
     "sdkVersion": "3",
     "enableMultiJS": false,
     "targetPlatforms": [
-      "aplite",
-      "basalt",
-      "chalk",
-      "diorite",
-      "emery",
       "flint"
     ],
     "watchapp": {
