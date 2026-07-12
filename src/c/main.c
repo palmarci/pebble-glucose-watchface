@@ -63,10 +63,12 @@ static void update_ago_display(void) {
     if (mins < 0) {
         s_ago_display[0] = '\0';
     } else if (mins < 60) {
-        snprintf(s_ago_display, sizeof(s_ago_display), "%dm ago", mins);
+        snprintf(s_ago_display, sizeof(s_ago_display), "%dm", mins);
     } else {
-        snprintf(s_ago_display, sizeof(s_ago_display), "%dh ago", mins / 60);
+        snprintf(s_ago_display, sizeof(s_ago_display), "%dh", mins / 60);
     }
+    // Future option: hide when fresh (e.g. `if (mins < 5) s_ago_display[0] = '\0';`).
+    // Kept visible for now for debug/soak.
     text_layer_set_text(s_ago_layer, s_ago_display);
 }
 
@@ -143,14 +145,22 @@ static void window_load(Window *window) {
     Layer *root = window_get_root_layer(window);
     GRect b = layer_get_bounds(root); // flint: 144 x 168
 
-    s_bg_layer = make_label(root, GRect(0, 18, b.size.w, 48),
+    // Layout mirrors the old xDrip watchface: BG (top) and time (bottom) share the same large
+    // font; time-ago tucks into the top-left; the middle band is reserved for a future BG graph.
+
+    // BG value — top, centered, large.
+    s_bg_layer = make_label(root, GRect(0, -6, b.size.w, 42),
                             FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
-    s_ago_layer = make_label(root, GRect(0, 68, b.size.w, 22),
-                             FONT_KEY_GOTHIC_18, GTextAlignmentCenter);
-    s_time_layer = make_label(root, GRect(0, 100, b.size.w, 40),
-                              FONT_KEY_BITHAM_34_MEDIUM_NUMBERS, GTextAlignmentCenter);
-    s_date_layer = make_label(root, GRect(0, 142, b.size.w, 22),
-                              FONT_KEY_GOTHIC_18, GTextAlignmentCenter);
+    // Time since last reading — top-left corner.
+    s_ago_layer = make_label(root, GRect(4, 4, 52, 26),
+                             FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentLeft);
+    // (middle band, ~y 35–100, left empty for now — future BG graph goes here)
+    // Current time — bottom, same large font as BG.
+    s_time_layer = make_label(root, GRect(0, 105, b.size.w, 42),
+                              FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
+    // Date — below the time.
+    s_date_layer = make_label(root, GRect(0, 140, b.size.w, 26),
+                              FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentCenter);
 
     update_bg_display();
     update_ago_display();
