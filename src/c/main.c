@@ -225,6 +225,9 @@ static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     update_time_and_date();
     update_ago_display();
     update_bg_display(); // may flip to "---" once the reading goes stale
+    // Redraw the graph too: point x-positions are computed from the current time, so without this the
+    // trace freezes between the 5-min pushes (doesn't creep left, old points don't fall off the edge).
+    if (s_graph_layer) layer_mark_dirty(s_graph_layer);
 }
 
 // Persist the current reading + graph so relaunching the watchface (e.g. after the menu) shows it
