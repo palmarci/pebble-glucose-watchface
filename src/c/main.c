@@ -17,6 +17,7 @@ static Window *s_window;
 static TextLayer *s_bg_layer;
 static TextLayer *s_ago_layer;
 static TextLayer *s_iob_layer;
+static TextLayer *s_status_layer;
 static TextLayer *s_time_layer;
 static TextLayer *s_date_layer;
 
@@ -24,7 +25,8 @@ static TextLayer *s_date_layer;
 static char s_bg_string[16] = NO_DATA;
 static uint32_t s_bg_timestamp = 0; // 0 => never received
 
-static char s_iob_string[8] = ""; // raw IOB units from phone, e.g. "2.5"; empty = unknown
+static char s_iob_string[8] = "";     // raw IOB units from phone, e.g. "2.5"; empty = unknown
+static char s_status_string[20] = ""; // pump status, e.g. "SUSPENDED"; empty = normal
 
 static char s_bg_display[16];
 static char s_ago_display[16];
@@ -124,6 +126,12 @@ static void new_data_callback(DictionaryIterator *iter, void *context) {
         update_iob_display();
     }
 
+    Tuple *status_tuple = dict_find(iter, KEY_STATUS_STRING);
+    if (status_tuple) {
+        safe_strncpy(s_status_string, status_tuple->value->cstring, sizeof(s_status_string));
+        text_layer_set_text(s_status_layer, s_status_string);
+    }
+
     APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s (ts=%lu) IOB: %s", s_bg_string, s_bg_timestamp,
             s_iob_string);
     update_bg_display();
@@ -143,7 +151,7 @@ static void send_ready(void) {
         return;
     }
     dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
-    dict_write_uint32(iter, KEY_CAPABILITIES, CAP_BG | CAP_IOB);
+    dict_write_uint32(iter, KEY_CAPABILITIES, CAP_BG | CAP_IOB | CAP_STATUS);
     if (app_message_outbox_send() != APP_MSG_OK) {
         APP_LOG(APP_LOG_LEVEL_ERROR, "outbox_send failed");
     }
@@ -183,7 +191,11 @@ static void window_load(Window *window) {
     // Insulin on board — top-right corner (e.g. "2.5U").
     s_iob_layer = make_label(root, GRect(b.size.w - 68, 4, 64, 26),
                              FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentRight);
-    // (middle band, ~y 35–100, left empty for now — future BG graph goes here)
+    // Pump status — centered in the middle band (empty when normal/SmartGuard-on).
+    // Shares space with the future graph; revisit placement when the graph lands.
+    s_status_layer = make_label(root, GRect(0, 60, b.size.w, 26),
+                                FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentCenter);
+    text_layer_set_text(s_status_layer, s_status_string);
     // Current time — bottom, same large font as BG.
     s_time_layer = make_label(root, GRect(0, 105, b.size.w, 42),
                               FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
@@ -201,6 +213,7 @@ static void window_unload(Window *window) {
     text_layer_destroy(s_bg_layer);
     text_layer_destroy(s_ago_layer);
     text_layer_destroy(s_iob_layer);
+    text_layer_destroy(s_status_layer);
     text_layer_destroy(s_time_layer);
     text_layer_destroy(s_date_layer);
 }
@@ -210,6 +223,7 @@ static void init_test_mode_data(void) {
     safe_strncpy(s_bg_string, TEST_BG_STRING, sizeof(s_bg_string));
     s_bg_timestamp = time(NULL) - TEST_MINUTES_AGO * 60;
     safe_strncpy(s_iob_string, TEST_IOB_STRING, sizeof(s_iob_string));
+    safe_strncpy(s_status_string, TEST_STATUS_STRING, sizeof(s_status_string));
 #endif
 }
 
