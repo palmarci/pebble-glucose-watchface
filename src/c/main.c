@@ -37,15 +37,17 @@ static bool has_reading(void) {
     return s_bg_timestamp != 0;
 }
 
-static int minutes_ago(void) {
+static int seconds_ago(void) {
     if (!has_reading()) {
         return -1;
     }
     int secs = (int)(time(NULL) - (time_t)s_bg_timestamp);
-    if (secs < 0) {
-        secs = 0;
-    }
-    return secs / 60;
+    return secs < 0 ? 0 : secs;
+}
+
+static int minutes_ago(void) {
+    int secs = seconds_ago();
+    return secs < 0 ? -1 : secs / 60;
 }
 
 static void update_bg_display(void) {
@@ -59,16 +61,16 @@ static void update_bg_display(void) {
 }
 
 static void update_ago_display(void) {
-    int mins = minutes_ago();
-    if (mins < 0) {
+    // TEMP DEBUG: show m:ss so update latency is visible. Revert to "%dm"/"%dh" (and MINUTE_UNIT
+    // ticking) once soak/debug is done. Future option: hide when fresh (mins < 5).
+    int secs = seconds_ago();
+    if (secs < 0) {
         s_ago_display[0] = '\0';
-    } else if (mins < 60) {
-        snprintf(s_ago_display, sizeof(s_ago_display), "%dm", mins);
+    } else if (secs < 3600) {
+        snprintf(s_ago_display, sizeof(s_ago_display), "%d:%02d", secs / 60, secs % 60);
     } else {
-        snprintf(s_ago_display, sizeof(s_ago_display), "%dh", mins / 60);
+        snprintf(s_ago_display, sizeof(s_ago_display), "%dh", secs / 3600);
     }
-    // Future option: hide when fresh (e.g. `if (mins < 5) s_ago_display[0] = '\0';`).
-    // Kept visible for now for debug/soak.
     text_layer_set_text(s_ago_layer, s_ago_display);
 }
 
@@ -82,10 +84,13 @@ static void update_time_and_date(void) {
     text_layer_set_text(s_date_layer, s_date_display);
 }
 
-static void minute_tick_callback(struct tm *tick_time, TimeUnits units_changed) {
-    update_time_and_date();
+static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
+    // TEMP DEBUG: ticking every second to drive the m:ss "time ago". Revert to MINUTE_UNIT later.
     update_ago_display();
     update_bg_display(); // may flip to "---" once the reading goes stale
+    if (units_changed & MINUTE_UNIT) {
+        update_time_and_date();
+    }
 }
 
 static void new_data_callback(DictionaryIterator *iter, void *context) {
@@ -151,8 +156,8 @@ static void window_load(Window *window) {
     // BG value — top, centered, large.
     s_bg_layer = make_label(root, GRect(0, -6, b.size.w, 42),
                             FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
-    // Time since last reading — top-left corner.
-    s_ago_layer = make_label(root, GRect(4, 4, 52, 26),
+    // Time since last reading — top-left corner (m:ss while debugging).
+    s_ago_layer = make_label(root, GRect(4, 4, 64, 26),
                              FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentLeft);
     // (middle band, ~y 35–100, left empty for now — future BG graph goes here)
     // Current time — bottom, same large font as BG.
@@ -186,7 +191,7 @@ static void init(void) {
     app_message_register_inbox_dropped(inbox_dropped_callback);
     app_message_open(256, 64);
 
-    tick_timer_service_subscribe(MINUTE_UNIT, minute_tick_callback);
+    tick_timer_service_subscribe(SECOND_UNIT, tick_callback);
     connection_service_subscribe(
         (ConnectionHandlers){.pebble_app_connection_handler = bluetooth_callback});
 
