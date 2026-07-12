@@ -131,7 +131,7 @@ static TextLayer *make_label(Layer *root, GRect frame, const char *font_key,
                              GTextAlignment align) {
     TextLayer *layer = text_layer_create(frame);
     text_layer_set_background_color(layer, GColorClear);
-    text_layer_set_text_color(layer, GColorWhite);
+    text_layer_set_text_color(layer, GColorBlack);
     text_layer_set_font(layer, fonts_get_system_font(font_key));
     text_layer_set_text_alignment(layer, align);
     layer_add_child(root, text_layer_get_layer(layer));
@@ -139,7 +139,7 @@ static TextLayer *make_label(Layer *root, GRect frame, const char *font_key,
 }
 
 static void window_load(Window *window) {
-    window_set_background_color(window, GColorBlack);
+    window_set_background_color(window, GColorWhite);
     Layer *root = window_get_root_layer(window);
     GRect b = layer_get_bounds(root); // flint: 144 x 168
 

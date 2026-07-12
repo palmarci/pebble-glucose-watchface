@@ -14,6 +14,14 @@
     "watchapp": {
       "watchface": true
     },
+    "companionApp": {
+      "android": {
+        "url": "https://github.com/mortenfyhn/minimed-pebble-bridge",
+        "apps": [
+          { "package": "com.mortenfyhn.minimedpebble" }
+        ]
+      }
+    },
     "resources": {
       "media": []
     }
