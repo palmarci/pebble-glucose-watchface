@@ -133,13 +133,6 @@ static int graph_value_to_y(int16_t height, int bg) {
     return height - ((bg - GRAPH_VALUE_MIN) * height) / (GRAPH_VALUE_MAX - GRAPH_VALUE_MIN);
 }
 
-// Dotted horizontal line, to distinguish target lines from the solid BG trace on the B&W screen.
-static void draw_dotted_hline(GContext *ctx, int y, int width) {
-    for (int x = 0; x < width; x += 4) {
-        graphics_fill_rect(ctx, GRect(x, y, 2, 1), 0, GCornerNone);
-    }
-}
-
 static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     if (s_graph_count == 0) {
         return;
@@ -148,10 +141,10 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     const int16_t w = b.size.w;
     const int16_t h = b.size.h;
 
-    // Target range lines (dotted).
+    // Target range lines: thin solid (1px), distinct from the thicker 2px BG trace.
     graphics_context_set_fill_color(ctx, GColorBlack);
-    draw_dotted_hline(ctx, graph_value_to_y(h, s_graph_high_line), w);
-    draw_dotted_hline(ctx, graph_value_to_y(h, s_graph_low_line), w);
+    graphics_fill_rect(ctx, GRect(0, graph_value_to_y(h, s_graph_high_line), w, 1), 0, GCornerNone);
+    graphics_fill_rect(ctx, GRect(0, graph_value_to_y(h, s_graph_low_line), w, 1), 0, GCornerNone);
 
     // BG trace: newest on the right, oldest (GRAPH_HOURS ago) on the left.
     graphics_context_set_stroke_color(ctx, GColorBlack);
