@@ -16,6 +16,7 @@
 static Window *s_window;
 static TextLayer *s_bg_layer;
 static TextLayer *s_ago_layer;
+static TextLayer *s_iob_layer;
 static TextLayer *s_time_layer;
 static TextLayer *s_date_layer;
 
@@ -23,8 +24,11 @@ static TextLayer *s_date_layer;
 static char s_bg_string[16] = NO_DATA;
 static uint32_t s_bg_timestamp = 0; // 0 => never received
 
+static char s_iob_string[8] = ""; // raw IOB units from phone, e.g. "2.5"; empty = unknown
+
 static char s_bg_display[16];
 static char s_ago_display[16];
+static char s_iob_display[12];
 static char s_time_display[8];
 static char s_date_display[16];
 
@@ -74,6 +78,15 @@ static void update_ago_display(void) {
     text_layer_set_text(s_ago_layer, s_ago_display);
 }
 
+static void update_iob_display(void) {
+    if (s_iob_string[0] == '\0') {
+        s_iob_display[0] = '\0';
+    } else {
+        snprintf(s_iob_display, sizeof(s_iob_display), "%sU", s_iob_string);
+    }
+    text_layer_set_text(s_iob_layer, s_iob_display);
+}
+
 static void update_time_and_date(void) {
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
@@ -104,7 +117,15 @@ static void new_data_callback(DictionaryIterator *iter, void *context) {
     } else if (bg_tuple) {
         s_bg_timestamp = time(NULL); // fall back to arrival time
     }
-    APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s (ts=%lu)", s_bg_string, s_bg_timestamp);
+
+    Tuple *iob_tuple = dict_find(iter, KEY_IOB_STRING);
+    if (iob_tuple) {
+        safe_strncpy(s_iob_string, iob_tuple->value->cstring, sizeof(s_iob_string));
+        update_iob_display();
+    }
+
+    APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s (ts=%lu) IOB: %s", s_bg_string, s_bg_timestamp,
+            s_iob_string);
     update_bg_display();
     update_ago_display();
 }
@@ -122,7 +143,7 @@ static void send_ready(void) {
         return;
     }
     dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
-    dict_write_uint32(iter, KEY_CAPABILITIES, CAP_BG);
+    dict_write_uint32(iter, KEY_CAPABILITIES, CAP_BG | CAP_IOB);
     if (app_message_outbox_send() != APP_MSG_OK) {
         APP_LOG(APP_LOG_LEVEL_ERROR, "outbox_send failed");
     }
@@ -159,6 +180,9 @@ static void window_load(Window *window) {
     // Time since last reading — top-left corner (m:ss while debugging).
     s_ago_layer = make_label(root, GRect(4, 4, 64, 26),
                              FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentLeft);
+    // Insulin on board — top-right corner (e.g. "2.5U").
+    s_iob_layer = make_label(root, GRect(b.size.w - 68, 4, 64, 26),
+                             FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentRight);
     // (middle band, ~y 35–100, left empty for now — future BG graph goes here)
     // Current time — bottom, same large font as BG.
     s_time_layer = make_label(root, GRect(0, 105, b.size.w, 42),
@@ -169,12 +193,14 @@ static void window_load(Window *window) {
 
     update_bg_display();
     update_ago_display();
+    update_iob_display();
     update_time_and_date();
 }
 
 static void window_unload(Window *window) {
     text_layer_destroy(s_bg_layer);
     text_layer_destroy(s_ago_layer);
+    text_layer_destroy(s_iob_layer);
     text_layer_destroy(s_time_layer);
     text_layer_destroy(s_date_layer);
 }
@@ -183,6 +209,7 @@ static void init_test_mode_data(void) {
 #ifdef TEST_MODE
     safe_strncpy(s_bg_string, TEST_BG_STRING, sizeof(s_bg_string));
     s_bg_timestamp = time(NULL) - TEST_MINUTES_AGO * 60;
+    safe_strncpy(s_iob_string, TEST_IOB_STRING, sizeof(s_iob_string));
 #endif
 }
 

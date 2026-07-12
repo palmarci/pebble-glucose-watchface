@@ -17,6 +17,8 @@
 // Phone -> watch: glucose data.
 #define KEY_BG_TIMESTAMP 10 // uint32, UNIX epoch seconds of the reading
 #define KEY_BG_STRING 11    // string, pre-formatted BG, e.g. "7.5"
+#define KEY_IOB_STRING 18   // string, pre-formatted insulin-on-board, e.g. "2.5"
 
 // Capability bits (what data the watchface wants).
 #define CAP_BG (1 << 0)
+#define CAP_IOB (1 << 4)
