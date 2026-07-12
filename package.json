@@ -1,0 +1,21 @@
+{
+  "name": "minimed-pebble-watchface",
+  "author": "Morten Fyhn Amundsen",
+  "version": "0.1.0",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "MiniMed BG",
+    "uuid": "567a3f6e-97d0-4f3a-b63f-916a8213d284",
+    "sdkVersion": "3",
+    "enableMultiJS": false,
+    "targetPlatforms": ["flint", "emery"],
+    "watchapp": {
+      "watchface": true
+    },
+    "resources": {
+      "media": []
+    }
+  }
+}
