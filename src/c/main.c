@@ -9,8 +9,12 @@
 #include "strings.h"
 #include "test_mode.h"
 
-// Show "---" instead of a stale value once the last reading is this old.
-#define STALE_MINUTES 6
+// Show "---" instead of a stale value once the last reading is this old. CGM cadence is 5 min, so
+// keep the last value on screen across a couple of missed readings before giving up on it.
+#define STALE_MINUTES 15
+// Below this age a reading is "fresh" and the time-ago label is hidden (it's only useful as an
+// ageing/staleness hint once a reading has been missed).
+#define FRESH_MINUTES 6
 
 // Graph config.
 #define GRAPH_HOURS 3
@@ -35,11 +39,22 @@
 #define PERSIST_GRAPH_HIGH 9
 #define PERSIST_GRAPH_LOW 10
 
+// Status strip: a full-width opaque white band hugging the status text, sitting low over the graph so
+// its uppercase letters land ~2px above the time. Custom-drawn (not a TextLayer background) so the
+// band can be full width yet vertically tight to the caps. All in screen coords; the layer is a plain
+// overlay over the graph that paints only the band + text (rest transparent, so the graph shows).
+#define STATUS_FONT FONT_KEY_GOTHIC_18_BOLD
+#define STATUS_LAYER_TOP 78 // overlay-layer top (screen y); gives graphics_draw_text room to render
+#define STATUS_LAYER_H 36
+#define STATUS_BAND_TOP 96 // white band top (~2px above the caps)
+#define STATUS_BAND_H 17   // band height (caps + a little room)
+#define STATUS_TEXT_TOP 92 // text box top; the font's top padding drops the glyphs into the band
+
 static Window *s_window;
 static TextLayer *s_bg_layer;
 static TextLayer *s_ago_layer;
 static TextLayer *s_iob_layer;
-static TextLayer *s_status_layer;
+static Layer *s_status_layer;
 static TextLayer *s_time_layer;
 static TextLayer *s_date_layer;
 static Layer *s_graph_layer;
@@ -98,10 +113,10 @@ static void update_bg_display(void) {
 }
 
 static void update_ago_display(void) {
-    // How old the current BG value is (in minutes), regardless of whether it arrived via push or poll.
-    // Future option: hide when fresh (mins < 5).
+    // How old the current BG value is (in minutes). Hidden while fresh; shown only once a reading has
+    // been missed, so it reads as a staleness hint rather than constant clutter.
     int mins = minutes_ago();
-    if (mins < 0) {
+    if (mins < FRESH_MINUTES) {
         s_ago_display[0] = '\0';
     } else if (mins < 60) {
         snprintf(s_ago_display, sizeof(s_ago_display), STR_AGO_MIN_FMT, mins);
@@ -133,11 +148,23 @@ static void update_time_and_date(void) {
 // The status label overlays the bottom of the graph as an opaque strip, but only when a status is
 // active; otherwise it's hidden so the full graph shows.
 static void update_status_display(void) {
-    bool active = s_status_string[0] != '\0';
-    layer_set_hidden(text_layer_get_layer(s_status_layer), !active);
-    if (active) {
-        text_layer_set_text(s_status_layer, s_status_string);
+    if (s_status_layer) layer_mark_dirty(s_status_layer);
+}
+
+// Paints only the band + text (when a status is active); everything else stays transparent so the
+// graph below shows through. Coords are layer-relative (layer top = STATUS_LAYER_TOP screen y).
+static void status_layer_update_proc(Layer *layer, GContext *ctx) {
+    if (s_status_string[0] == '\0') {
+        return;
     }
+    const int16_t w = layer_get_bounds(layer).size.w;
+    graphics_context_set_fill_color(ctx, GColorWhite);
+    graphics_fill_rect(ctx, GRect(0, STATUS_BAND_TOP - STATUS_LAYER_TOP, w, STATUS_BAND_H), 0,
+                       GCornerNone);
+    graphics_context_set_text_color(ctx, GColorBlack);
+    graphics_draw_text(ctx, s_status_string, fonts_get_system_font(STATUS_FONT),
+                       GRect(0, STATUS_TEXT_TOP - STATUS_LAYER_TOP, w, 24),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
 // Map a BG value (mg/dL / 2) to a y within the graph, clamping to the fixed range.
@@ -351,11 +378,11 @@ static void window_load(Window *window) {
     layer_set_update_proc(s_graph_layer, graph_layer_update_proc);
     layer_add_child(root, s_graph_layer);
 
-    // Pump status — overlays the bottom strip of the graph, opaque so it stays readable; hidden
-    // (so the full graph shows) whenever there's no status. Added after the graph so it draws on top.
-    s_status_layer = make_label(root, GRect(0, 76, b.size.w, 26),
-                                FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentCenter);
-    text_layer_set_background_color(s_status_layer, GColorWhite);
+    // Pump status — a full-width band + text painted low over the graph (see status_layer_update_proc).
+    // Added after the graph so it draws on top; the time (added next) still draws over its bottom edge.
+    s_status_layer = layer_create(GRect(0, STATUS_LAYER_TOP, b.size.w, STATUS_LAYER_H));
+    layer_set_update_proc(s_status_layer, status_layer_update_proc);
+    layer_add_child(root, s_status_layer);
 
     // Current time — bottom, same large font as BG.
     s_time_layer = make_label(root, GRect(0, 105, b.size.w, 42),
@@ -375,7 +402,7 @@ static void window_unload(Window *window) {
     text_layer_destroy(s_bg_layer);
     text_layer_destroy(s_ago_layer);
     text_layer_destroy(s_iob_layer);
-    text_layer_destroy(s_status_layer);
+    layer_destroy(s_status_layer);
     text_layer_destroy(s_time_layer);
     text_layer_destroy(s_date_layer);
     layer_destroy(s_graph_layer);
