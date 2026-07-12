@@ -6,12 +6,11 @@
 
 #include <pebble.h>
 #include "protocol.h"
+#include "strings.h"
 #include "test_mode.h"
 
 // Show "---" instead of a stale value once the last reading is this old.
 #define STALE_MINUTES 6
-
-#define NO_DATA "---"
 
 static Window *s_window;
 static TextLayer *s_bg_layer;
@@ -22,7 +21,7 @@ static TextLayer *s_time_layer;
 static TextLayer *s_date_layer;
 
 // Latest reading from the phone.
-static char s_bg_string[16] = NO_DATA;
+static char s_bg_string[16] = STR_NO_DATA;
 static uint32_t s_bg_timestamp = 0; // 0 => never received
 
 static char s_iob_string[8] = "";     // raw IOB units from phone, e.g. "2.5"; empty = unknown
@@ -59,7 +58,7 @@ static int minutes_ago(void) {
 static void update_bg_display(void) {
     int mins = minutes_ago();
     if (!has_reading() || mins >= STALE_MINUTES) {
-        safe_strncpy(s_bg_display, NO_DATA, sizeof(s_bg_display));
+        safe_strncpy(s_bg_display, STR_NO_DATA, sizeof(s_bg_display));
     } else {
         safe_strncpy(s_bg_display, s_bg_string, sizeof(s_bg_display));
     }
@@ -67,15 +66,15 @@ static void update_bg_display(void) {
 }
 
 static void update_ago_display(void) {
-    // TEMP DEBUG: show m:ss so update latency is visible. Revert to "%dm"/"%dh" (and MINUTE_UNIT
-    // ticking) once soak/debug is done. Future option: hide when fresh (mins < 5).
-    int secs = seconds_ago();
-    if (secs < 0) {
+    // How old the current BG value is (in minutes), regardless of whether it arrived via push or poll.
+    // Future option: hide when fresh (mins < 5).
+    int mins = minutes_ago();
+    if (mins < 0) {
         s_ago_display[0] = '\0';
-    } else if (secs < 3600) {
-        snprintf(s_ago_display, sizeof(s_ago_display), "%d:%02d", secs / 60, secs % 60);
+    } else if (mins < 60) {
+        snprintf(s_ago_display, sizeof(s_ago_display), STR_AGO_MIN_FMT, mins);
     } else {
-        snprintf(s_ago_display, sizeof(s_ago_display), "%dh", secs / 3600);
+        snprintf(s_ago_display, sizeof(s_ago_display), STR_AGO_HOURS_FMT, mins / 60);
     }
     text_layer_set_text(s_ago_layer, s_ago_display);
 }
@@ -84,7 +83,7 @@ static void update_iob_display(void) {
     if (s_iob_string[0] == '\0') {
         s_iob_display[0] = '\0';
     } else {
-        snprintf(s_iob_display, sizeof(s_iob_display), "%sU", s_iob_string);
+        snprintf(s_iob_display, sizeof(s_iob_display), STR_IOB_FMT, s_iob_string);
     }
     text_layer_set_text(s_iob_layer, s_iob_display);
 }
@@ -93,19 +92,16 @@ static void update_time_and_date(void) {
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
     strftime(s_time_display, sizeof(s_time_display),
-             clock_is_24h_style() ? "%H:%M" : "%I:%M", t);
-    strftime(s_date_display, sizeof(s_date_display), "%a %d %b", t);
+             clock_is_24h_style() ? STR_TIME_24H_FMT : STR_TIME_12H_FMT, t);
+    strftime(s_date_display, sizeof(s_date_display), STR_DATE_FMT, t);
     text_layer_set_text(s_time_layer, s_time_display);
     text_layer_set_text(s_date_layer, s_date_display);
 }
 
 static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
-    // TEMP DEBUG: ticking every second to drive the m:ss "time ago". Revert to MINUTE_UNIT later.
+    update_time_and_date();
     update_ago_display();
     update_bg_display(); // may flip to "---" once the reading goes stale
-    if (units_changed & MINUTE_UNIT) {
-        update_time_and_date();
-    }
 }
 
 static void new_data_callback(DictionaryIterator *iter, void *context) {
@@ -232,7 +228,7 @@ static void init(void) {
     app_message_register_inbox_dropped(inbox_dropped_callback);
     app_message_open(256, 64);
 
-    tick_timer_service_subscribe(SECOND_UNIT, tick_callback);
+    tick_timer_service_subscribe(MINUTE_UNIT, tick_callback);
     connection_service_subscribe(
         (ConnectionHandlers){.pebble_app_connection_handler = bluetooth_callback});
 
