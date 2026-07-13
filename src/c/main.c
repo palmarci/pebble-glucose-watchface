@@ -442,7 +442,9 @@ static void init_test_mode_data(void) {
 }
 
 static void init(void) {
+#ifndef TEST_MODE
     load_state(); // restore last reading + graph so a relaunch renders immediately, not empty
+#endif
     app_message_register_inbox_received(new_data_callback);
     app_message_register_inbox_dropped(inbox_dropped_callback);
     app_message_open(1024, 64); // inbox large enough for the graph byte array
