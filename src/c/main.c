@@ -11,6 +11,8 @@
 
 // Show "---" instead of a stale value once the last reading is this old. CGM cadence is 5 min, so
 // keep the last value on screen across a couple of missed readings before giving up on it.
+// MUST match the bridge's STALE_SECONDS (minimed-pebble-bridge BridgeForegroundService) so the watch
+// and the phone status-bar icon go stale at the same time.
 #define STALE_MINUTES 15
 // Below this age a reading is "fresh" and the time-ago label is hidden (it's only useful as an
 // ageing/staleness hint once a reading has been missed).
