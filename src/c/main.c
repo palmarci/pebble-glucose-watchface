@@ -347,7 +347,8 @@ static void send_ready(void) {
         return;
     }
     dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
-    dict_write_uint32(iter, KEY_CAPABILITIES, CAP_BG | CAP_IOB | CAP_STATUS | CAP_GRAPH);
+    dict_write_uint32(iter, KEY_CAPABILITIES, CAP_BG | CAP_IOB | CAP_STATUS);
+    dict_write_uint8(iter, KEY_GRAPH_HOURS, GRAPH_HOURS); // request our graph window (0 would disable)
     if (app_message_outbox_send() != APP_MSG_OK) {
         APP_LOG(APP_LOG_LEVEL_ERROR, "outbox_send failed");
     }
