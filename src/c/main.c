@@ -186,8 +186,19 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
 
     // Target range lines: thin solid (1px), distinct from the thicker 2px BG trace.
     graphics_context_set_fill_color(ctx, GColorBlack);
-    graphics_fill_rect(ctx, GRect(0, graph_value_to_y(h, s_graph_high_line), w, 1), 0, GCornerNone);
-    graphics_fill_rect(ctx, GRect(0, graph_value_to_y(h, s_graph_low_line), w, 1), 0, GCornerNone);
+    const int high_y = graph_value_to_y(h, s_graph_high_line);
+    const int low_y = graph_value_to_y(h, s_graph_low_line);
+    graphics_fill_rect(ctx, GRect(0, high_y, w, 1), 0, GCornerNone);
+    graphics_fill_rect(ctx, GRect(0, low_y, w, 1), 0, GCornerNone);
+
+    // Hour tick marks: short vertical sticks crossing the target lines at each past hour (1h & 2h ago
+    // on the 3h horizon), as a light time axis. Newest is the right edge, oldest the left.
+    const int tick_half = 3; // stick extends this far above/below each line
+    for (int hour = 1; hour < GRAPH_HOURS; hour++) {
+        const int tx = w - (hour * w) / GRAPH_HOURS;
+        graphics_fill_rect(ctx, GRect(tx, high_y - tick_half, 1, tick_half * 2 + 1), 0, GCornerNone);
+        graphics_fill_rect(ctx, GRect(tx, low_y - tick_half, 1, tick_half * 2 + 1), 0, GCornerNone);
+    }
 
     // BG trace: newest on the right, oldest (GRAPH_HOURS ago) on the left.
     graphics_context_set_stroke_color(ctx, GColorBlack);
