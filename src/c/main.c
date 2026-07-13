@@ -18,9 +18,13 @@
 // ageing/staleness hint once a reading has been missed).
 #define FRESH_MINUTES 6
 
-// Graph config.
-#define GRAPH_HOURS 3
-#define MAX_GRAPH_POINTS 64 // 3 h @ 5 min = 36; headroom
+// Graph config. The sender (app-configured) decides how many hours of history to send; the watchface
+// renders whatever span it receives, so the window follows the app setting. We announce GRAPH_MAX_HOURS
+// as the most we can display.
+#define GRAPH_MAX_HOURS 24    // widest window we can render/buffer; announced as our capability
+#define MAX_GRAPH_POINTS 300  // 24 h @ 5 min = 288, + headroom
+#define PERSIST_MAX_POINTS 128 // persist_write_data caps at 256 B/key (uint16 offsets -> 128 points);
+                               // a larger graph isn't persisted — the phone's ready-ping resend refills it
 // Fixed y-axis 2.2–16 mmol/L, in "mg/dL / 2" wire units (40..288 mg/dL). Out-of-range clamps to edge.
 #define GRAPH_VALUE_MIN 20
 #define GRAPH_VALUE_MAX 144
@@ -191,20 +195,29 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     graphics_fill_rect(ctx, GRect(0, high_y, w, 1), 0, GCornerNone);
     graphics_fill_rect(ctx, GRect(0, low_y, w, 1), 0, GCornerNone);
 
-    // Hour tick marks: short vertical sticks crossing the target lines at each past hour (1h & 2h ago
-    // on the 3h horizon), as a light time axis. Newest is the right edge, oldest the left.
+    // Time axis: derive the window from the span of data we actually have (the sender, app-configured,
+    // decides how much history to send; we follow it). Round to the nearest whole hour for clean ticks.
+    const uint32_t now = time(NULL);
+    int oldest_min = (int)(((int64_t)now - (int64_t)s_graph_ref_timestamp) / 60);
+    if (oldest_min < 0) oldest_min = 0;
+    int window_hours = (oldest_min + 30) / 60; // round to nearest hour
+    if (window_hours < 1) window_hours = 1;
+    if (window_hours > GRAPH_MAX_HOURS) window_hours = GRAPH_MAX_HOURS;
+    const int graph_minutes = window_hours * 60;
+
+    // Hour tick marks crossing the target lines, at an adaptive interval so they don't crowd on wide
+    // windows. Newest is the right edge, oldest the left.
     const int tick_half = 3; // stick extends this far above/below each line
-    for (int hour = 1; hour < GRAPH_HOURS; hour++) {
-        const int tx = w - (hour * w) / GRAPH_HOURS;
+    const int tick_step = window_hours <= 6 ? 1 : (window_hours <= 12 ? 2 : 4);
+    for (int hour = tick_step; hour < window_hours; hour += tick_step) {
+        const int tx = w - (hour * w) / window_hours;
         graphics_fill_rect(ctx, GRect(tx, high_y - tick_half, 1, tick_half * 2 + 1), 0, GCornerNone);
         graphics_fill_rect(ctx, GRect(tx, low_y - tick_half, 1, tick_half * 2 + 1), 0, GCornerNone);
     }
 
-    // BG trace: newest on the right, oldest (GRAPH_HOURS ago) on the left.
+    // BG trace: newest on the right, oldest on the left.
     graphics_context_set_stroke_color(ctx, GColorBlack);
     graphics_context_set_stroke_width(ctx, 2);
-    const uint32_t now = time(NULL);
-    const int graph_minutes = GRAPH_HOURS * 60;
     int prev_x = 0, prev_y = 0;
     bool has_prev = false;
     for (int i = 0; i < s_graph_count; i++) {
@@ -251,12 +264,16 @@ static void save_state(void) {
     persist_write_string(PERSIST_IOB_STRING, s_iob_string);
     persist_write_string(PERSIST_STATUS_STRING, s_status_string);
     persist_write_int(PERSIST_GRAPH_REF, (int32_t)s_graph_ref_timestamp);
-    persist_write_int(PERSIST_GRAPH_COUNT, s_graph_count);
     persist_write_int(PERSIST_GRAPH_HIGH, s_graph_high_line);
     persist_write_int(PERSIST_GRAPH_LOW, s_graph_low_line);
-    if (s_graph_count > 0) {
+    // persist_write_data caps at 256 B/key, so only persist reasonably small graphs; a larger one is
+    // left out (COUNT=0) and refilled by the phone's resend on the ready ping after relaunch.
+    if (s_graph_count > 0 && s_graph_count <= PERSIST_MAX_POINTS) {
+        persist_write_int(PERSIST_GRAPH_COUNT, s_graph_count);
         persist_write_data(PERSIST_GRAPH_OFFSETS, s_graph_offsets, s_graph_count * sizeof(uint16_t));
         persist_write_data(PERSIST_GRAPH_VALUES, s_graph_bg_values, s_graph_count * sizeof(uint8_t));
+    } else {
+        persist_write_int(PERSIST_GRAPH_COUNT, 0);
     }
 }
 
@@ -348,7 +365,7 @@ static void send_ready(void) {
     }
     dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
     dict_write_uint32(iter, KEY_CAPABILITIES, CAP_BG | CAP_IOB | CAP_STATUS);
-    dict_write_uint8(iter, KEY_GRAPH_HOURS, GRAPH_HOURS); // request our graph window (0 would disable)
+    dict_write_uint8(iter, KEY_GRAPH_HOURS, GRAPH_MAX_HOURS); // the most we can display; sender may send less
     if (app_message_outbox_send() != APP_MSG_OK) {
         APP_LOG(APP_LOG_LEVEL_ERROR, "outbox_send failed");
     }
@@ -432,7 +449,7 @@ static void init_test_mode_data(void) {
     safe_strncpy(s_iob_string, TEST_IOB_STRING, sizeof(s_iob_string));
     safe_strncpy(s_status_string, TEST_STATUS_STRING, sizeof(s_status_string));
     // Dummy 3-hour graph: a triangle wave ~70..190 mg/dL (crosses the 4.0 & 10.0 target lines).
-    s_graph_ref_timestamp = time(NULL) - (uint32_t)GRAPH_HOURS * 3600;
+    s_graph_ref_timestamp = time(NULL) - (uint32_t)3 * 3600;
     s_graph_count = 36; // 3 h @ 5 min
     for (int i = 0; i < 36; i++) {
         s_graph_offsets[i] = i * 5;
@@ -448,7 +465,7 @@ static void init(void) {
 #endif
     app_message_register_inbox_received(new_data_callback);
     app_message_register_inbox_dropped(inbox_dropped_callback);
-    app_message_open(1024, 64); // inbox large enough for the graph byte array
+    app_message_open(2048, 64); // inbox large enough for the graph byte array (up to 24 h of points)
 
     tick_timer_service_subscribe(MINUTE_UNIT, tick_callback);
     connection_service_subscribe(

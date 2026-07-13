@@ -21,7 +21,7 @@ Each watchface has a UUID, which the sender must target. To support arbitrary wa
 |----|------|------|-------------|
 | 0 | PROTOCOL_VERSION | uint8 | Protocol version. 1 = v1. |
 | 1 | CAPABILITIES | uint32 | Capability bitfield, see below. |
-| 2 | GRAPH_HOURS | uint8 | Hours of graph history wanted. 0 = no graph at all. |
+| 2 | GRAPH_HOURS | uint8 | Most hours of graph the watchface can show. 0 = no graph. The sender sends up to this and may (e.g. by its own setting) send fewer; the watchface renders whatever span arrives. |
 
 ## Message keys: sender → watchface (data)
 
