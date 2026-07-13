@@ -1,61 +1,44 @@
-# Pebble Glucose Protocol
+# Pebble Glucose Protocol v1 (draft)
 
-**Protocol version 1** (in progress — not yet finalized).
+A small protocol for pushing glucose data to a Pebble watchface over [AppMessage](https://developer.rebble.io/). It decouples the watchface from the data source. The watchface announces which data it can display, and the sender pushes only those.
 
-A small, source-agnostic protocol for pushing glucose data to a Pebble watchface over
-[AppMessage](https://developer.rebble.io/). It decouples the watchface from the data source: the
-**watchface** announces which fields it can display, and any **sender** pushes only those.
+- Sender: Anything with glucose data and a Pebble link, could be xDrip, a custom app, or something else.
+- Watchface: Any Pebble watchface implementing this protocol.
 
-- **Sender** — anything with glucose data and a Pebble link: a CGM/pump bridge (e.g. the MiniMed→Pebble
-  bridge), an xDrip integration, a Nightscout bridge, a Dexcom/Libre app, … On Android, a PebbleKit app
-  that sends to the watchface's UUID.
-- **Watchface** — any Pebble watchface implementing this protocol.
-
-Each watchface has its own UUID and the sender targets it; there is no shared hard-coded UUID, so
-watchfaces can be published and installed independently.
-
-This document defines the full protocol. An implementation only needs the subset it cares about — a
-watchface requests the fields it can show, and a sender sends the fields it has that were requested.
+Each watchface has a UUID, which the sender must target. To support arbitrary watchfaces the sender must let the user set the watchface UUID.
 
 ## Communication flow
 
-1. On launch, and again on every Bluetooth reconnect, the **watchface** sends a **capability
-   announcement** (`PROTOCOL_VERSION`, `CAPABILITIES`, and optionally `GRAPH_HOURS`).
-2. The **sender** records the request and immediately pushes the latest values for the requested fields.
-3. The sender pushes an update whenever new data arrives.
-4. The watchface may re-send its announcement at any time to force a fresh push.
+1. On launch, and again on every Bluetooth reconnect, the watchface sends a capability
+   announcement (`PROTOCOL_VERSION`, `CAPABILITIES`, and optionally `GRAPH_HOURS`).
+2. The sender records the request and immediately pushes the latest values for the requested fields.
+3. The sender pushes an update whenever it has new data.
+4. The watchface can re-send its announcement any time to request a full refresh.
 
 ## Message keys: watchface → sender (capability announcement)
 
 | Key | Name | Type | Description |
 |----|------|------|-------------|
-| 0 | PROTOCOL_VERSION | uint8 | Protocol version (currently 1). |
-| 1 | CAPABILITIES | uint32 | Bitfield of the single-value fields the watchface wants (see below). |
-| 2 | GRAPH_HOURS | uint8 | Hours of graph history wanted. **0 = no graph.** Also gates whether the sender sends `GRAPH_*` at all. |
+| 0 | PROTOCOL_VERSION | uint8 | Protocol version. 1 = v1. |
+| 1 | CAPABILITIES | uint32 | Capability bitfield, see below. |
+| 2 | GRAPH_HOURS | uint8 | Hours of graph history wanted. 0 = no graph at all. |
 
 ## Message keys: sender → watchface (data)
 
 | Key | Name | Type | Description |
 |----|------|------|-------------|
-| 10 | BG_TIMESTAMP | uint32 | Reading time, Unix epoch **seconds** — the *measurement* time, not the send time (see best practices). |
-| 11 | BG_STRING | string | Pre-formatted BG in the sender's units, e.g. `"7.5"` or `"135"`. Shown verbatim. |
-| 12 | DELTA_STRING | string | Pre-formatted change vs the previous reading, e.g. `"+0.3"`. |
-| 13 | TREND_ARROW | uint8 | Trend arrow (see indices below). |
-| 14 | IOB_STRING | string | Pre-formatted insulin-on-board, e.g. `"2.5"`. |
-| 15 | STATUS_STRING | string | Short status line, sender-defined wording, e.g. `"SUSPENDED"`, `"TEMP TARGET 0:09"`, `"NO SIGNAL"`. Empty/absent = nothing to show. |
-| 16 | PHONE_BATTERY | uint8 | Sender/phone battery level, 0–100. |
+| 10 | BG_TIMESTAMP | uint32 | BG reading timestamp, as Unix epoch seconds. |
+| 11 | BG_STRING | string | Formatted BG data in the sender's units, e.g. `"7.5"` or `"135"` |
+| 12 | DELTA_STRING | string | Formatted BG change from previous reading, e.g. `"+0.3"`. |
+| 13 | TREND_ARROW | uint8 | Trend arrow index, see below. |
+| 14 | IOB_STRING | string | Formatted insulin-on-board, e.g. `"2.5"`. |
+| 15 | STATUS_STRING | string | Any sensor/pump status text, e.g. `"SUSPENDED"`, `"NO SIGNAL"`, etc. |
+| 16 | SENDER_BATTERY | uint8 | Sender battery level, 0–100. |
 | 17 | GRAPH_DATA | bytes | Recent BG history for the graph (see format below). |
 | 18 | GRAPH_HIGH_LINE | uint8 | High target line, **mg/dL ÷ 2** (e.g. 90 = 180 mg/dL = 10.0 mmol/L). |
 | 19 | GRAPH_LOW_LINE | uint8 | Low target line, **mg/dL ÷ 2** (e.g. 36 = 72 mg/dL = 4.0 mmol/L). |
 
-Values are pre-formatted **strings** where a unit or wording choice exists (BG, delta, IOB, status): the
-*sender* owns units, rounding, wording and localization; the watchface just renders. Numeric variants
-can be added later as new keys + capability bits if a watchface needs to format or draw them itself.
-
 ## Capability bits (CAPABILITIES, uint32)
-
-The watchface sets a bit per single-value field it wants. (The graph is gated by `GRAPH_HOURS`, not a
-bit.)
 
 | Bit | Mask | Field |
 |----|------|-------|
@@ -64,13 +47,9 @@ bit.)
 | 2 | `0x04` | Delta |
 | 3 | `0x08` | IOB |
 | 4 | `0x10` | Status line |
-| 5 | `0x20` | Phone battery |
+| 5 | `0x20` | Sender battery |
 
 ## Trend arrow indices
-
-A `uint8`, so there's ample room; senders map their device's arrows to the nearest value and watchfaces
-render whatever subset they support. Not all devices use slanted arrows (e.g. some pumps only have
-single/double/triple up/down).
 
 | Index | Meaning |
 |-------|---------|
@@ -92,42 +71,26 @@ Little-endian. `bg_values` are **mg/dL ÷ 2**, which fits 0–510 mg/dL (0–28 
 
 | Bytes | Field | Type | Description | Unit |
 |-------|-------|------|-------------|------|
-| 4 | ref_timestamp | uint32 | Unix time of the reference (oldest) point | seconds |
+| 4 | ref_timestamp | uint32 | Unix epoch time of the reference (oldest) point | seconds |
 | 2 | count | uint16 | Number of points, N | |
 | 2N | offsets | uint16[N] | Time of each point since `ref_timestamp` | minutes |
 | N | bg_values | uint8[N] | BG of each point | mg/dL ÷ 2 |
 
-**Total size:** `6 + 3N` bytes (3 h at 5-min spacing → N=36 → 114 bytes).
+Total size: `6 + 3N` bytes (3 hours at 5 min intervals → 114 bytes).
 
-How the graph is drawn — window, axes, dots vs lines, gap handling, tick marks — is up to the watchface.
+## Notes for implementations
 
-## Best practices for implementations
+Sender:
 
-**Sender**
+- `BG_TIMESTAMP` should be the reading's measurement time, and should advance on each new reading even when the value is unchanged. A CGM "current value" read carries no time, so key it off a real new-reading signal, not off the value changing — otherwise a flat run of identical readings looks stale on the watch.
+- Push updates as new data arrives if you can. Polling is fine if that's all the source allows.
+- You can send a full snapshot or just the fields that changed; the watchface keeps the last value for any field not in a message. Send large fields like `GRAPH_DATA` only when they actually change.
+- Respond to a capability announcement with an immediate push even if nothing changed, so a just-launched watchface fills in without waiting for the next reading.
 
-- **Push on new data**, event-driven, rather than polling on a timer; an occasional keep-alive/fallback
-  push is fine as a safety net.
-- **`BG_TIMESTAMP` must be the measurement time**, and must advance on each genuinely new reading *even
-  when the value is unchanged*. A CGM "current value" read carries no time, so if you only advance on a
-  value change, a flat stretch of identical readings looks stale within minutes on the watch. Key the
-  timestamp off a real "new reading" signal, not off the value changing.
-- **One message per update, carrying all requested fields** — don't send a message per field. Dedupe by
-  the full payload so you never resend a byte-identical message; status and IOB simply ride along with
-  each update. (Because the timestamp/age and IOB usually change every reading, a changed status is
-  effectively sent promptly without a dedicated status-change trigger.)
-- **A capability announcement always triggers a fresh push**, even if the data is unchanged, so a
-  just-relaunched watchface fills in immediately instead of waiting for the next reading.
-- **Honor `CAPABILITIES` and `GRAPH_HOURS`** — send only what was requested; send no `GRAPH_*` when
-  `GRAPH_HOURS` is 0 or absent.
-- **Target the watchface's UUID** (configurable), since UUIDs are per-watchface.
+Watchface:
 
-**Watchface**
-
-- Send the announcement on launch **and on every Bluetooth reconnect**.
-- Own **staleness**: pick a threshold and show a clear "no data" state when the last `BG_TIMESTAMP` is
-  older than it (don't let a frozen value look live).
-- Treat every message as "latest wins"; persist the last values so a relaunch (e.g. returning from the
-  menu) renders immediately rather than blank.
+- Decide staleness on the watchface side, not the sender: pick a threshold and show a clear "no data" state once the last `BG_TIMESTAMP` is older than it, so a frozen value can't look live.
+- Treat each field as latest-wins and keep the last value for fields not in a given message. Persist across relaunch so returning from the menu isn't blank.
 
 ## Reference implementations
 
