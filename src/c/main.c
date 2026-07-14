@@ -44,6 +44,7 @@
 #define PERSIST_GRAPH_VALUES 8
 #define PERSIST_GRAPH_HIGH 9
 #define PERSIST_GRAPH_LOW 10
+#define PERSIST_GRAPH_HOURS 11
 
 // Status strip: a full-width opaque white band hugging the status text, sitting low over the graph so
 // its uppercase letters land ~2px above the time. Custom-drawn (not a TextLayer background) so the
@@ -79,6 +80,7 @@ static uint16_t s_graph_offsets[MAX_GRAPH_POINTS];  // minutes since ref_timesta
 static uint8_t s_graph_bg_values[MAX_GRAPH_POINTS]; // mg/dL / 2
 static uint8_t s_graph_high_line = 90;              // 10.0 mmol/L (default; phone may override)
 static uint8_t s_graph_low_line = 36;               // 4.0 mmol/L
+static uint8_t s_graph_hours = 0;                   // window (hours) the phone asked for; 0 = derive from data
 
 static char s_bg_display[16];
 static char s_ago_display[16];
@@ -195,21 +197,30 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     graphics_fill_rect(ctx, GRect(0, high_y, w, 1), 0, GCornerNone);
     graphics_fill_rect(ctx, GRect(0, low_y, w, 1), 0, GCornerNone);
 
-    // Time axis: derive the window from the span of data we actually have (the sender, app-configured,
-    // decides how much history to send; we follow it). Round to the nearest whole hour for clean ticks.
+    // Time axis window. The phone sets it explicitly (KEY_GRAPH_HOURS) and we follow it, so the axis and
+    // hour ticks change the instant the setting does — the trace then fills in from the right as the
+    // phone's history backfill lands, instead of the window lagging until enough data has arrived (which
+    // made growing the window look buggy/slow). Before any setting is received (s_graph_hours == 0), fall
+    // back to deriving it from the data span so a first launch still shows a sensible window.
     const uint32_t now = time(NULL);
-    int oldest_min = (int)(((int64_t)now - (int64_t)s_graph_ref_timestamp) / 60);
-    if (oldest_min < 0) oldest_min = 0;
-    int window_hours = (oldest_min + 30) / 60; // round to nearest hour
-    if (window_hours < 1) window_hours = 1;
+    int window_hours;
+    if (s_graph_hours > 0) {
+        window_hours = s_graph_hours;
+    } else {
+        int oldest_min = (int)(((int64_t)now - (int64_t)s_graph_ref_timestamp) / 60);
+        if (oldest_min < 0) oldest_min = 0;
+        window_hours = (oldest_min + 30) / 60; // round to nearest hour
+        if (window_hours < 1) window_hours = 1;
+    }
     if (window_hours > GRAPH_MAX_HOURS) window_hours = GRAPH_MAX_HOURS;
     const int graph_minutes = window_hours * 60;
 
-    // Hour tick marks crossing the target lines, at an adaptive interval so they don't crowd on wide
-    // windows. Newest is the right edge, oldest the left.
+    // One tick mark per hour, crossing the target lines. The count reflects the window (5 ticks at 6h,
+    // 11 at 12h, 23 at 24h) so wider windows read as visibly denser — an adaptive per-window step made
+    // them look identical instead, since doubling the step as the window doubled put the ticks on the
+    // same pixels. Newest is the right edge, oldest the left.
     const int tick_half = 3; // stick extends this far above/below each line
-    const int tick_step = window_hours <= 6 ? 1 : (window_hours <= 12 ? 2 : 4);
-    for (int hour = tick_step; hour < window_hours; hour += tick_step) {
+    for (int hour = 1; hour < window_hours; hour++) {
         const int tx = w - (hour * w) / window_hours;
         graphics_fill_rect(ctx, GRect(tx, high_y - tick_half, 1, tick_half * 2 + 1), 0, GCornerNone);
         graphics_fill_rect(ctx, GRect(tx, low_y - tick_half, 1, tick_half * 2 + 1), 0, GCornerNone);
@@ -266,6 +277,7 @@ static void save_state(void) {
     persist_write_int(PERSIST_GRAPH_REF, (int32_t)s_graph_ref_timestamp);
     persist_write_int(PERSIST_GRAPH_HIGH, s_graph_high_line);
     persist_write_int(PERSIST_GRAPH_LOW, s_graph_low_line);
+    persist_write_int(PERSIST_GRAPH_HOURS, s_graph_hours);
     // persist_write_data caps at 256 B/key, so only persist reasonably small graphs; a larger one is
     // left out (COUNT=0) and refilled by the phone's resend on the ready ping after relaunch.
     if (s_graph_count > 0 && s_graph_count <= PERSIST_MAX_POINTS) {
@@ -284,6 +296,7 @@ static void load_state(void) {
     if (persist_exists(PERSIST_STATUS_STRING)) persist_read_string(PERSIST_STATUS_STRING, s_status_string, sizeof(s_status_string));
     if (persist_exists(PERSIST_GRAPH_HIGH)) s_graph_high_line = (uint8_t)persist_read_int(PERSIST_GRAPH_HIGH);
     if (persist_exists(PERSIST_GRAPH_LOW)) s_graph_low_line = (uint8_t)persist_read_int(PERSIST_GRAPH_LOW);
+    if (persist_exists(PERSIST_GRAPH_HOURS)) s_graph_hours = (uint8_t)persist_read_int(PERSIST_GRAPH_HOURS);
     if (persist_exists(PERSIST_GRAPH_COUNT) && persist_exists(PERSIST_GRAPH_OFFSETS) &&
         persist_exists(PERSIST_GRAPH_VALUES)) {
         uint16_t count = (uint16_t)persist_read_int(PERSIST_GRAPH_COUNT);
@@ -345,8 +358,19 @@ static void new_data_callback(DictionaryIterator *iter, void *context) {
     Tuple *low_tuple = dict_find(iter, KEY_GRAPH_LOW_LINE);
     if (low_tuple) s_graph_low_line = low_tuple->value->uint8;
 
-    APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s (ts=%lu) IOB: %s graph=%d", s_bg_string,
-            s_bg_timestamp, s_iob_string, s_graph_count);
+    // Explicit graph window from the phone; overrides the data-derived fallback so the axis follows the
+    // app setting immediately (see graph_layer_update_proc).
+    Tuple *hours_tuple = dict_find(iter, KEY_GRAPH_HOURS);
+    if (hours_tuple) {
+        uint8_t hours = hours_tuple->value->uint8;
+        if (hours != s_graph_hours) {
+            s_graph_hours = hours;
+            if (s_graph_layer) layer_mark_dirty(s_graph_layer);
+        }
+    }
+
+    APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s (ts=%lu) IOB: %s graph=%d hours=%d", s_bg_string,
+            s_bg_timestamp, s_iob_string, s_graph_count, s_graph_hours);
     update_bg_display();
     update_ago_display();
 }

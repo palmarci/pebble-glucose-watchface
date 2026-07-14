@@ -21,7 +21,7 @@ Each watchface has a UUID, which the sender must target. To support arbitrary wa
 |----|------|------|-------------|
 | 0 | PROTOCOL_VERSION | uint8 | Protocol version. 1 = v1. |
 | 1 | CAPABILITIES | uint32 | Capability bitfield, see below. |
-| 2 | GRAPH_HOURS | uint8 | Most hours of graph the watchface can show. 0 = no graph. The sender sends up to this and may (e.g. by its own setting) send fewer; the watchface renders whatever span arrives. |
+| 2 | GRAPH_HOURS | uint8 | Widest graph window the watchface can show, in hours. 0 = no graph. The sender picks the actual window (up to this, e.g. from its own setting) and sends it back on key 2 alongside the graph data; see sender → watchface. |
 
 ## Message keys: sender → watchface (data)
 
@@ -34,6 +34,7 @@ Each watchface has a UUID, which the sender must target. To support arbitrary wa
 | 14 | IOB_STRING | string | Formatted insulin-on-board, e.g. `"2.5"`. |
 | 15 | STATUS_STRING | string | Any sensor/pump status text, e.g. `"SUSPENDED"`, `"NO SIGNAL"`, etc. |
 | 16 | SENDER_BATTERY | uint8 | Sender battery level, 0–100. |
+| 2 | GRAPH_HOURS | uint8 | Active graph window, in hours (≤ the watchface's announced max). The watchface uses this as its time axis directly, so the window follows the sender's setting immediately and the trace fills in as data arrives — rather than the watchface inferring the span from the data it happens to hold. |
 | 17 | GRAPH_DATA | bytes | Recent BG history for the graph (see format below). |
 | 18 | GRAPH_HIGH_LINE | uint8 | High target line, **mg/dL ÷ 2** (e.g. 90 = 180 mg/dL = 10.0 mmol/L). |
 | 19 | GRAPH_LOW_LINE | uint8 | Low target line, **mg/dL ÷ 2** (e.g. 36 = 72 mg/dL = 4.0 mmol/L). |
