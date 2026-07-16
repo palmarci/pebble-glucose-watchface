@@ -36,12 +36,14 @@
 #define GRAPH_WINDOW_HOURS 2
 #define GRAPH_WIDTH_NUM 2 // graph width = screen width * NUM/DEN; the rest is the arrow region
 #define GRAPH_WIDTH_DEN 3
-// The graph band and the arrow band share these so the fan pivot lands exactly on the graph trace. The
-// arrow band is a little taller than the graph so arrows/labels have headroom above and below.
+// The graph band and the arrow band share these so the arrow pivot lands exactly on the graph trace.
+// The arrow band is taller than the graph band (extends above and below it) so an arrow projecting out
+// from a reading near the top/bottom of the range has room; the arrow length is clamped to this band so
+// it never runs off and vanishes. It sits behind the time/BG text, which stay on top.
 #define GRAPH_TOP_Y 38
 #define GRAPH_BAND_H 64
-#define ARROW_TOP_Y 34
-#define ARROW_BAND_H 70
+#define ARROW_TOP_Y 30
+#define ARROW_BAND_H 86
 #define GRAPH_DOT_SIZE 3 // BG history is drawn as dots (not a connected line); square side in px
 
 // Trend arrow (issue #1). Extrapolated on-watch from recent BG, NOT read from the pump. Its angle is
@@ -49,7 +51,7 @@
 // line would continue from the latest point — not an arbitrary rate->angle mapping. See
 // arrow_layer_update_proc for the slope estimator and why it was chosen.
 #define TREND_MAX_GAP_MINUTES 15 // ignore the last two points if a sensor gap wider than this separates them
-#define TREND_ARROW_LEN 20       // arrow length start-to-tip in px, arrowhead included
+#define TREND_ARROW_LEN 24       // arrow length start-to-tip in px, arrowhead included
 #define TREND_ARROW_GAP 6        // gap (px) between the trace's last point and the arrow start
 #define TREND_ARROW_HEAD_LEN 12  // arrowhead length along the shaft (px)
 #define TREND_ARROW_HEAD_W 14    // arrowhead base width (px); width ~= len*1.15 looks equilateral (60-60-60)
@@ -268,7 +270,7 @@ static bool trend_slope(float *slope) {
 // in y (screen y grows downward, so a rising slope points up). This makes the arrow tangent to how the
 // line would continue from the latest point, at the same scale as the graph. It starts TREND_ARROW_GAP
 // past the pivot so there's a clear break between the data (trace) and the extrapolation (arrow).
-static void trend_draw_arrow(GContext *ctx, GPoint pivot, float slope, float px_per_min,
+static void trend_draw_arrow(GContext *ctx, GRect bounds, GPoint pivot, float slope, float px_per_min,
                              float px_per_wire) {
     const float vx = px_per_min;
     const float vy = -slope * px_per_wire;
@@ -277,13 +279,34 @@ static void trend_draw_arrow(GContext *ctx, GPoint pivot, float slope, float px_
     const float ux = vx / mag, uy = vy / mag; // unit vector along the shaft
     const float px = -uy, py = ux;            // unit vector perpendicular to it
 
+    // Clamp the length so the tip — and thus the whole arrow + head — stays inside the layer. A steep
+    // arrow from a reading near the top/bottom of the range would otherwise run off the drawable area and
+    // vanish. Only the length shrinks; the angle, which is the whole point, is preserved.
+    float end = TREND_ARROW_GAP + TREND_ARROW_LEN;
+    if (ux > 1e-6f) {
+        const float d = (bounds.size.w - 1 - pivot.x) / ux;
+        if (d < end) end = d;
+    } else if (ux < -1e-6f) {
+        const float d = (1 - pivot.x) / ux;
+        if (d < end) end = d;
+    }
+    if (uy > 1e-6f) {
+        const float d = (bounds.size.h - 1 - pivot.y) / uy;
+        if (d < end) end = d;
+    } else if (uy < -1e-6f) {
+        const float d = (1 - pivot.y) / uy;
+        if (d < end) end = d;
+    }
+    if (end <= TREND_ARROW_GAP) return; // too cramped for even a minimal arrow
+
     const GPoint start = GPoint(pivot.x + (int)(ux * TREND_ARROW_GAP), pivot.y + (int)(uy * TREND_ARROW_GAP));
-    const int end = TREND_ARROW_GAP + TREND_ARROW_LEN;
     const GPoint tip = GPoint(pivot.x + (int)(ux * end), pivot.y + (int)(uy * end));
 
-    // Head: base set back TREND_ARROW_HEAD_LEN along the shaft, TREND_ARROW_HEAD_W wide (both tweakable).
-    const int head_len = TREND_ARROW_HEAD_LEN;
-    const int head_half_w = TREND_ARROW_HEAD_W / 2;
+    // Head: base set back along the shaft, TREND_ARROW_HEAD_W wide; both shrink proportionally if the
+    // arrow had to be clamped shorter than the head's natural length.
+    int head_len = TREND_ARROW_HEAD_LEN;
+    if (head_len > (int)(end - TREND_ARROW_GAP)) head_len = (int)(end - TREND_ARROW_GAP);
+    const int head_half_w = TREND_ARROW_HEAD_W * head_len / (TREND_ARROW_HEAD_LEN * 2);
     const GPoint base = GPoint(tip.x - (int)(ux * head_len), tip.y - (int)(uy * head_len));
 
     // Shaft stops at the head's base, not the tip, so its rounded 2px cap can't poke past (and round off)
@@ -327,14 +350,15 @@ static void arrow_layer_update_proc(Layer *layer, GContext *ctx) {
     // ages, and the arrow follows. newest_x is computed exactly as the graph plots that point. The graph's
     // own px/min and px/value set the angle; this layer spans the full width and the graph (time axis) is
     // its left NUM/DEN.
-    const int graph_w = layer_get_bounds(layer).size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
+    const GRect bounds = layer_get_bounds(layer);
+    const int graph_w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
     const int graph_minutes = GRAPH_WINDOW_HOURS * 60;
     const int newest_x = graph_w - (age_min * graph_w) / graph_minutes;
     const float px_per_min = (float)graph_w / graph_minutes;
     const float px_per_wire = (float)GRAPH_BAND_H / (GRAPH_VALUE_MAX - GRAPH_VALUE_MIN);
     const GPoint pivot =
         GPoint(newest_x, yoff + graph_value_to_y(GRAPH_BAND_H, s_graph_bg_values[s_graph_count - 1]));
-    trend_draw_arrow(ctx, pivot, slope, px_per_min, px_per_wire);
+    trend_draw_arrow(ctx, bounds, pivot, slope, px_per_min, px_per_wire);
 }
 
 static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
