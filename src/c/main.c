@@ -42,6 +42,7 @@
 #define GRAPH_BAND_H 64
 #define ARROW_TOP_Y 34
 #define ARROW_BAND_H 70
+#define GRAPH_DOT_SIZE 3 // BG history is drawn as dots (not a connected line); square side in px
 
 // Trend arrow (issue #1). Extrapolated on-watch from recent BG, NOT read from the pump. Its angle is
 // the graph's own visual slope (same px/min and px/value as the trace), so it lies tangent to how the
@@ -227,43 +228,25 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
         return;
     }
     const GRect b = layer_get_bounds(layer);
-    const int16_t w = b.size.w;
-    const int16_t h = b.size.h;
+    const int16_t w = b.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN; // time-axis width; layer spans full
+    const int16_t h = b.size.h;                                     // width so edge dots aren't clipped
     const uint32_t now = time(NULL);
     const int graph_minutes = GRAPH_WINDOW_HOURS * 60;
 
-    // BG trace: newest on the right, oldest on the left. Connect consecutive points with a 2px line,
-    // but break the line across a sensor gap wider than the threshold; a point with no drawable
-    // neighbour on either side is shown as an isolated dot.
+    // BG history as dots, no connecting lines: each reading is a small filled square, roughly the weight
+    // of the old 2px trace. Newest on the right, oldest on the left. Sensor gaps need no special handling
+    // here — a gap simply shows as missing dots.
     graphics_context_set_fill_color(ctx, GColorBlack);
-    graphics_context_set_stroke_color(ctx, GColorBlack);
-    graphics_context_set_stroke_width(ctx, 2);
-    int prev_x = 0, prev_y = 0;
-    bool has_prev = false;
+    const int d = GRAPH_DOT_SIZE;
     for (int i = 0; i < s_graph_count; i++) {
         const uint32_t pt_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[i] * 60;
         const int mins_ago = (int)(((int64_t)now - (int64_t)pt_ts) / 60);
         if (mins_ago < 0 || mins_ago > graph_minutes) {
-            has_prev = false;
             continue;
         }
         const int x = w - (mins_ago * w) / graph_minutes;
         const int y = graph_value_to_y(h, s_graph_bg_values[i]);
-
-        bool has_next = false;
-        if (i + 1 < s_graph_count) {
-            const uint32_t next_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[i + 1] * 60;
-            const int gap = next_ts > pt_ts ? (int)((next_ts - pt_ts) / 60) : (int)((pt_ts - next_ts) / 60);
-            has_next = gap <= GRAPH_GAP_THRESHOLD_MINUTES;
-        }
-        if (has_prev) {
-            graphics_draw_line(ctx, GPoint(prev_x, prev_y), GPoint(x, y));
-        } else if (!has_next) {
-            graphics_fill_circle(ctx, GPoint(x, y), 1); // isolated point
-        }
-        prev_x = x;
-        prev_y = y;
-        has_prev = has_next;
+        graphics_fill_rect(ctx, GRect(x - d / 2, y - d / 2, d, d), 0, GCornerNone);
     }
 }
 
@@ -513,8 +496,8 @@ static void window_load(Window *window) {
 
     // Layout: BG (top) and time (bottom) share the same large font; time-ago top-left, IOB top-right;
     // the middle band's left 2/3 is the 2 h graph (status label overlaid on its bottom strip) and its
-    // right 1/3 is the trend fan (issue #1).
-    const int graph_w = b.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
+    // right 1/3 is the trend arrow (issue #1). The graph/axis/arrow layers are all full screen width so
+    // edge dots and the arrow aren't clipped; each maps its own content into the left 2/3.
 
     // BG value — top, centered, large.
     s_bg_layer = make_label(root, GRect(0, -6, b.size.w, 42),
@@ -530,8 +513,9 @@ static void window_load(Window *window) {
     // graph still shows the axes. Aligned to the graph band so its y matches the dots.
     s_axis_layer = make_layer(root, GRect(0, GRAPH_TOP_Y, b.size.w, GRAPH_BAND_H), axis_layer_update_proc);
 
-    // BG graph — middle band, left 2/3. Dots only (see graph_layer_update_proc).
-    s_graph_layer = make_layer(root, GRect(0, GRAPH_TOP_Y, graph_w, GRAPH_BAND_H), graph_layer_update_proc);
+    // BG graph — middle band. Dots only (see graph_layer_update_proc); full width so the newest dot at
+    // the right edge of the 2 h area isn't clipped.
+    s_graph_layer = make_layer(root, GRect(0, GRAPH_TOP_Y, b.size.w, GRAPH_BAND_H), graph_layer_update_proc);
 
     // Trend arrow — full screen width so it can anchor on the newest trace point (which sits in the
     // graph's left 2/3) and extend into the right third; a little taller than the graph band for
