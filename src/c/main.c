@@ -93,7 +93,7 @@ static Layer *s_graph_layer;
 static Layer *s_arrow_layer;
 
 // Latest reading from the phone.
-static char s_bg_string[16] = STR_NO_DATA;
+static char s_bg_string[16] = ""; // whatever the phone last sent; "" until the first reading arrives
 static uint32_t s_bg_timestamp = 0; // 0 => never received
 
 static char s_iob_string[8] = "";     // raw IOB units from phone, e.g. "2.5"; empty = unknown
@@ -132,10 +132,10 @@ static int minutes_ago(void) {
 }
 
 static void update_bg_display(void) {
-    int mins = minutes_ago();
-    const bool stale = (mins < 0) || (mins >= STALE_MINUTES);
-    // Both s_bg_string and STR_NO_DATA are persistent, so point the label straight at one (no copy).
-    text_layer_set_text(s_bg_layer, stale ? STR_NO_DATA : s_bg_string);
+    // Show verbatim what the phone last sent. "---" appears only when the phone sends it (the pump has
+    // no sensor value) -- NOT because the reading went stale; staleness is conveyed by the "ago" label
+    // instead. So the watch never invents "---"; every "---" mirrors the pump. (issue #3)
+    text_layer_set_text(s_bg_layer, s_bg_string);
 }
 
 static void update_ago_display(void) {
@@ -339,7 +339,8 @@ static void arrow_layer_update_proc(Layer *layer, GContext *ctx) {
     float slope;
     if (!trend_slope(&slope)) return;
 
-    // Don't extrapolate from stale data — no arrow rather than a misleading one (mirrors the "---" rule).
+    // Don't extrapolate from stale data — no arrow rather than a misleading one. (The BG number keeps
+    // showing the last value once stale; the arrow doesn't, since an extrapolation from old points misleads.)
     const uint32_t now = time(NULL);
     const uint32_t newest_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[s_graph_count - 1] * 60;
     const int age_min = (int)(((int64_t)now - (int64_t)newest_ts) / 60);
@@ -363,8 +364,7 @@ static void arrow_layer_update_proc(Layer *layer, GContext *ctx) {
 
 static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     update_time_and_date();
-    update_ago_display();
-    update_bg_display(); // may flip to "---" once the reading goes stale
+    update_ago_display(); // advances the staleness hint each minute; the BG text only changes on receipt
     // Redraw the graph too: point x-positions are computed from the current time, so without this the
     // trace freezes between the 5-min pushes (doesn't creep left, old points don't fall off the edge).
     if (s_graph_layer) layer_mark_dirty(s_graph_layer);

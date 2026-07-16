@@ -7,7 +7,9 @@
 
 #pragma once
 
-#define STR_NO_DATA "---"       // BG shown when there's no reading yet, or it's stale
+// NOTE: there is no "no data" placeholder here. The BG field shows whatever the phone last sent, so the
+// only "---" that appears is the literal string the bridge sends when the pump has no sensor value; the
+// watch never synthesizes it. Before the first reading the field is empty. (issue #3)
 #define STR_IOB_FMT "%sU"       // insulin on board, e.g. "2.5U"
 #define STR_AGO_MIN_FMT "%dm"   // age of the current BG value, in minutes, e.g. "5m"
 #define STR_AGO_HOURS_FMT "%dh" // age of the current BG value, >= 1 hour
