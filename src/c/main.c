@@ -131,11 +131,18 @@ static int minutes_ago(void) {
     return secs < 0 ? 0 : secs / 60;
 }
 
+// True once the current reading is too old to trust (no fresh push for STALE_MINUTES). During a pump
+// outage no message arrives to clear the display, so this is re-evaluated from the minute tick.
+static bool is_stale(void) {
+    return has_reading() && minutes_ago() >= STALE_MINUTES;
+}
+
 static void update_bg_display(void) {
-    // Show verbatim what the phone last sent. "---" appears only when the phone sends it (the pump has
-    // no sensor value) -- NOT because the reading went stale; staleness is conveyed by the "ago" label
-    // instead. So the watch never invents "---"; every "---" mirrors the pump. (issue #3)
-    text_layer_set_text(s_bg_layer, s_bg_string);
+    // Stale -> blank the number rather than showing a value that hasn't updated in a while (a stale BG
+    // sat on screen for ~8 h during an overnight outage). The "ago" label still conveys how old it is.
+    // While fresh, show verbatim what the phone sent: "---" appears only when the phone sends it (the
+    // pump has no sensor value), so the watch never invents it -- every "---" mirrors the pump.
+    text_layer_set_text(s_bg_layer, is_stale() ? "" : s_bg_string);
 }
 
 static void update_ago_display(void) {
@@ -153,7 +160,9 @@ static void update_ago_display(void) {
 }
 
 static void update_iob_display(void) {
-    if (s_iob_string[0] == '\0') {
+    if (s_iob_string[0] == '\0' || is_stale()) {
+        // Blank when stale for the same reason as BG: a frozen IOB is misleading (it decays to ~0 over
+        // an outage), so don't keep showing the last value.
         s_iob_display[0] = '\0';
     } else {
         snprintf(s_iob_display, sizeof(s_iob_display), STR_IOB_FMT, s_iob_string);
@@ -364,7 +373,11 @@ static void arrow_layer_update_proc(Layer *layer, GContext *ctx) {
 
 static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     update_time_and_date();
-    update_ago_display(); // advances the staleness hint each minute; the BG text only changes on receipt
+    update_ago_display(); // advances the staleness hint each minute
+    // Re-run on the tick, not just on receipt: during an outage no message arrives, so this is what
+    // blanks the BG/IOB once they cross STALE_MINUTES.
+    update_bg_display();
+    update_iob_display();
     // Redraw the graph too: point x-positions are computed from the current time, so without this the
     // trace freezes between the 5-min pushes (doesn't creep left, old points don't fall off the edge).
     if (s_graph_layer) layer_mark_dirty(s_graph_layer);
