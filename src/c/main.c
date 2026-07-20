@@ -2,11 +2,11 @@
 //
 // Displays the current blood glucose value pushed from the Android bridge app
 // over AppMessage, plus how long ago it arrived, a 2 h graph, and the current time/date.
-// The trend arrow is NOT taken from the pump; it's extrapolated on-watch from the recent BG data
-// (issue #1) and drawn continuing the graph line from its latest point.
+// The trend projection is NOT taken from the pump; it's extrapolated on-watch from the recent BG data
+// (issue #1) and drawn as a dotted line continuing the graph line from its latest point.
 
 #include <pebble.h>
-#include <math.h> // sqrtf (arrow direction)
+#include <math.h> // sqrtf (projection direction)
 #include "protocol.h"
 #include "strings.h"
 #include "test_mode.h"
@@ -32,29 +32,29 @@
 // Don't connect points more than this far apart (a sensor gap draws as a break, not a straight line).
 #define GRAPH_GAP_THRESHOLD_MINUTES 15
 // Issue #1: the graph area is fixed to the last 2 h (regardless of the phone's KEY_GRAPH_HOURS) and
-// occupies the left 2/3 of the screen; the right 1/3 shows the extrapolated trend fan (see below).
+// occupies the left 2/3 of the screen; the right 1/3 shows the extrapolated trend projection (see below).
 #define GRAPH_WINDOW_HOURS 2
-#define GRAPH_WIDTH_NUM 2 // graph width = screen width * NUM/DEN; the rest is the arrow region
+#define GRAPH_WIDTH_NUM 2 // graph width = screen width * NUM/DEN; the rest is the projection region
 #define GRAPH_WIDTH_DEN 3
-// The graph band and the arrow band share these so the arrow pivot lands exactly on the graph trace.
-// The arrow band is taller than the graph band (extends above and below it) so an arrow projecting out
-// from a reading near the top/bottom of the range has room; the arrow length is clamped to this band so
-// it never runs off and vanishes. It sits behind the time/BG text, which stay on top.
+// The graph band and the projection band share these so the projection pivot lands exactly on the graph
+// trace. The projection band is taller than the graph band (extends above and below it) so a projection
+// running out from a reading near the top/bottom of the range has room; its length is clamped to this band
+// so it never runs off and vanishes. It sits behind the time/BG text, which stay on top.
 #define GRAPH_TOP_Y 38
 #define GRAPH_BAND_H 64
-#define ARROW_TOP_Y 30
-#define ARROW_BAND_H 86
-#define GRAPH_DOT_SIZE 3 // BG history is drawn as dots (not a connected line); square side in px
+#define TREND_TOP_Y 30
+#define TREND_BAND_H 86
 
-// Trend arrow (issue #1). Extrapolated on-watch from recent BG, NOT read from the pump. Its angle is
+// Trend projection (issue #1). Extrapolated on-watch from recent BG, NOT read from the pump. Its angle is
 // the graph's own visual slope (same px/min and px/value as the trace), so it lies tangent to how the
-// line would continue from the latest point — not an arbitrary rate->angle mapping. See
-// arrow_layer_update_proc for the slope estimator and why it was chosen.
+// line would continue from the latest point — not an arbitrary rate->angle mapping. Drawn as a dotted line
+// so it reads clearly as a projection, distinct from the solid data trace. See trend_layer_update_proc for
+// the slope estimator and why it was chosen.
 #define TREND_MAX_GAP_MINUTES 15 // ignore the last two points if a sensor gap wider than this separates them
-#define TREND_ARROW_LEN 24       // arrow length start-to-tip in px, arrowhead included
-#define TREND_ARROW_GAP 6        // gap (px) between the trace's last point and the arrow start
-#define TREND_ARROW_HEAD_LEN 12  // arrowhead length along the shaft (px)
-#define TREND_ARROW_HEAD_W 14    // arrowhead base width (px); width ~= len*1.15 looks equilateral (60-60-60)
+#define TREND_PROJ_LEN 12        // projection length start-to-end in px (clamped to stay inside the band)
+#define TREND_PROJ_GAP 6         // gap (px) between the trace's last point and the projection start
+#define TREND_DOT_SIZE 3         // dotted-line dot square side in px
+#define TREND_DOT_COUNT 3        // dots drawn along the projection, spread over its (clamped) length
 
 // Persistent-storage keys (survive watchface unload and watch reboot). Separate namespace from the
 // AppMessage keys in protocol.h. Leaving the watchface for the menu and returning relaunches the app,
@@ -90,7 +90,7 @@ static TextLayer *s_time_layer;
 static TextLayer *s_date_layer;
 static Layer *s_axis_layer;
 static Layer *s_graph_layer;
-static Layer *s_arrow_layer;
+static Layer *s_trend_layer;
 
 // Latest reading from the phone.
 static char s_bg_string[16] = ""; // whatever the phone last sent; "" until the first reading arrives
@@ -212,8 +212,8 @@ static int graph_value_to_y(int16_t height, int bg) {
 // Static graph axes — the target lines and hour ticks — drawn independent of the BG data, so an empty
 // graph still shows "axes waiting for data". Full screen width: the target lines are pure value
 // thresholds with no x-meaning, so they span everything. The hour ticks belong to the time axis, which
-// only exists over the graph region (left 2/3) — the right 1/3 is the arrow projection, not past time —
-// so ticks stop there. Drawn behind the dots and arrows.
+// only exists over the graph region (left 2/3) — the right 1/3 is the trend projection, not past time —
+// so ticks stop there. Drawn behind the trace and projection.
 static void axis_layer_update_proc(Layer *layer, GContext *ctx) {
     const GRect b = layer_get_bounds(layer);
     const int w = b.size.w; // full screen width
@@ -225,8 +225,8 @@ static void axis_layer_update_proc(Layer *layer, GContext *ctx) {
     graphics_fill_rect(ctx, GRect(0, high_y, w, 1), 0, GCornerNone);
     graphics_fill_rect(ctx, GRect(0, low_y, w, 1), 0, GCornerNone);
 
-    // Two ticks crossing the target lines, at 1/3 and 2/3 of the width from the left.
-    const int tick_half = 3;
+    // Two ticks crossing the target lines, at 1/3 and 2/3 of the width from the left, both 5px tall.
+    const int tick_half = 2; // 5px total (2*2+1)
     for (int n = 1; n <= 2; n++) {
         const int tx = w * n / 3;
         graphics_fill_rect(ctx, GRect(tx, high_y - tick_half, 1, tick_half * 2 + 1), 0, GCornerNone);
@@ -244,24 +244,31 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     const uint32_t now = time(NULL);
     const int graph_minutes = GRAPH_WINDOW_HOURS * 60;
 
-    // BG history as dots, no connecting lines: each reading is a small filled square, roughly the weight
-    // of the old 2px trace. Newest on the right, oldest on the left. Sensor gaps need no special handling
-    // here — a gap simply shows as missing dots.
-    graphics_context_set_fill_color(ctx, GColorBlack);
-    const int d = GRAPH_DOT_SIZE;
+    // BG history as a connected 2px line, newest on the right, oldest on the left. Consecutive readings
+    // are joined unless a sensor gap wider than GRAPH_GAP_THRESHOLD_MINUTES separates them, which draws as
+    // a break rather than a long straight segment bridging the missing data. Every point's x/y is computed
+    // (even ones older than the visible window); off-screen endpoints just let the graphics library clip
+    // the segment, so the trace enters cleanly from the left edge.
+    graphics_context_set_stroke_color(ctx, GColorBlack);
+    graphics_context_set_stroke_width(ctx, 2);
+    bool have_prev = false;
+    int prev_x = 0, prev_y = 0, prev_off = 0;
     for (int i = 0; i < s_graph_count; i++) {
         const uint32_t pt_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[i] * 60;
         const int mins_ago = (int)(((int64_t)now - (int64_t)pt_ts) / 60);
-        if (mins_ago < 0 || mins_ago > graph_minutes) {
-            continue;
-        }
         const int x = w - (mins_ago * w) / graph_minutes;
         const int y = graph_value_to_y(h, s_graph_bg_values[i]);
-        graphics_fill_rect(ctx, GRect(x - d / 2, y - d / 2, d, d), 0, GCornerNone);
+        if (have_prev && (int)s_graph_offsets[i] - prev_off <= GRAPH_GAP_THRESHOLD_MINUTES) {
+            graphics_draw_line(ctx, GPoint(prev_x, prev_y), GPoint(x, y));
+        }
+        have_prev = true;
+        prev_x = x;
+        prev_y = y;
+        prev_off = (int)s_graph_offsets[i];
     }
 }
 
-// --- Trend arrow (issue #1) -------------------------------------------------------------------------
+// --- Trend projection (issue #1) --------------------------------------------------------------------
 
 // The slope, in wire units (mg/dL / 2) per minute, from the last two points; false if there aren't two
 // or a sensor gap separates them. Points are oldest->newest by index, so the newest reading is last.
@@ -274,24 +281,23 @@ static bool trend_slope(float *slope) {
     return true;
 }
 
-// The arrow: a shaft at the graph's own visual slope (same 2px width as the trace) with a solid
-// triangular head. Direction: over one minute the trace moves px_per_min right and slope*px_per_wire
-// in y (screen y grows downward, so a rising slope points up). This makes the arrow tangent to how the
-// line would continue from the latest point, at the same scale as the graph. It starts TREND_ARROW_GAP
-// past the pivot so there's a clear break between the data (trace) and the extrapolation (arrow).
-static void trend_draw_arrow(GContext *ctx, GRect bounds, GPoint pivot, float slope, float px_per_min,
-                             float px_per_wire) {
+// The projection: a dotted line running from the latest point at the graph's own visual slope. Direction:
+// over one minute the trace moves px_per_min right and slope*px_per_wire in y (screen y grows downward, so
+// a rising slope points up). This makes the line tangent to how the trace would continue from the latest
+// point, at the same scale as the graph. It starts TREND_PROJ_GAP past the pivot so there's a clear break
+// between the data (solid trace) and the extrapolation (dotted line).
+static void trend_draw_projection(GContext *ctx, GRect bounds, GPoint pivot, float slope,
+                                  float px_per_min, float px_per_wire) {
     const float vx = px_per_min;
     const float vy = -slope * px_per_wire;
     const float mag = sqrtf(vx * vx + vy * vy);
     if (mag < 1e-6f) return;
-    const float ux = vx / mag, uy = vy / mag; // unit vector along the shaft
-    const float px = -uy, py = ux;            // unit vector perpendicular to it
+    const float ux = vx / mag, uy = vy / mag; // unit vector along the projection
 
-    // Clamp the length so the tip — and thus the whole arrow + head — stays inside the layer. A steep
-    // arrow from a reading near the top/bottom of the range would otherwise run off the drawable area and
-    // vanish. Only the length shrinks; the angle, which is the whole point, is preserved.
-    float end = TREND_ARROW_GAP + TREND_ARROW_LEN;
+    // Clamp the length so the whole dotted line stays inside the layer. A steep projection from a reading
+    // near the top/bottom of the range would otherwise run off the drawable area and vanish. Only the
+    // length shrinks; the angle, which is the whole point, is preserved.
+    float end = TREND_PROJ_GAP + TREND_PROJ_LEN;
     if (ux > 1e-6f) {
         const float d = (bounds.size.w - 1 - pivot.x) / ux;
         if (d < end) end = d;
@@ -306,39 +312,23 @@ static void trend_draw_arrow(GContext *ctx, GRect bounds, GPoint pivot, float sl
         const float d = (1 - pivot.y) / uy;
         if (d < end) end = d;
     }
-    if (end <= TREND_ARROW_GAP) return; // too cramped for even a minimal arrow
+    if (end <= TREND_PROJ_GAP) return; // too cramped for even a dot
 
-    const GPoint start = GPoint(pivot.x + (int)(ux * TREND_ARROW_GAP), pivot.y + (int)(uy * TREND_ARROW_GAP));
-    const GPoint tip = GPoint(pivot.x + (int)(ux * end), pivot.y + (int)(uy * end));
-
-    // Head: base set back along the shaft, TREND_ARROW_HEAD_W wide; both shrink proportionally if the
-    // arrow had to be clamped shorter than the head's natural length.
-    int head_len = TREND_ARROW_HEAD_LEN;
-    if (head_len > (int)(end - TREND_ARROW_GAP)) head_len = (int)(end - TREND_ARROW_GAP);
-    const int head_half_w = TREND_ARROW_HEAD_W * head_len / (TREND_ARROW_HEAD_LEN * 2);
-    const GPoint base = GPoint(tip.x - (int)(ux * head_len), tip.y - (int)(uy * head_len));
-
-    // Shaft stops at the head's base, not the tip, so its rounded 2px cap can't poke past (and round off)
-    // the sharp triangle point. The wide base hides the cap.
-    graphics_context_set_stroke_color(ctx, GColorBlack);
-    graphics_context_set_stroke_width(ctx, 2);
-    graphics_draw_line(ctx, start, base);
-
-    // Solid head — a filled GPath (Pebble has no fill-triangle, and stroked lines rounded the corners).
-    GPoint pts[3] = {
-        tip,
-        GPoint(base.x + (int)(px * head_half_w), base.y + (int)(py * head_half_w)),
-        GPoint(base.x - (int)(px * head_half_w), base.y - (int)(py * head_half_w)),
-    };
-    GPathInfo info = {.num_points = 3, .points = pts};
-    GPath *head = gpath_create(&info);
+    // Dots along the line (Pebble has no native dashed line): TREND_DOT_COUNT small filled squares,
+    // each matching the trace's thickness, spread evenly from the start gap to the clamped end.
     graphics_context_set_fill_color(ctx, GColorBlack);
-    gpath_draw_filled(ctx, head);
-    gpath_destroy(head);
+    const int dh = TREND_DOT_SIZE / 2;
+    const float span = end - TREND_PROJ_GAP;
+    for (int k = 0; k < TREND_DOT_COUNT; k++) {
+        const float t = TREND_PROJ_GAP + span * k / (TREND_DOT_COUNT - 1);
+        const int x = pivot.x + (int)(ux * t);
+        const int y = pivot.y + (int)(uy * t);
+        graphics_fill_rect(ctx, GRect(x - dh, y - dh, TREND_DOT_SIZE, TREND_DOT_SIZE), 0, GCornerNone);
+    }
 }
 
-static void arrow_layer_update_proc(Layer *layer, GContext *ctx) {
-    const int yoff = GRAPH_TOP_Y - ARROW_TOP_Y; // this band sits a little higher than the graph band
+static void trend_layer_update_proc(Layer *layer, GContext *ctx) {
+    const int yoff = GRAPH_TOP_Y - TREND_TOP_Y; // this band sits a little higher than the graph band
 
     // Estimator chosen after a July 2026 soak: the plain last-two-points slope. It's the most responsive
     // and, extended tangent to the trace, matched the eye best. The smoothed alternatives soaked
@@ -348,16 +338,16 @@ static void arrow_layer_update_proc(Layer *layer, GContext *ctx) {
     float slope;
     if (!trend_slope(&slope)) return;
 
-    // Don't extrapolate from stale data — no arrow rather than a misleading one. (The BG number keeps
-    // showing the last value once stale; the arrow doesn't, since an extrapolation from old points misleads.)
+    // Don't extrapolate from stale data — no projection rather than a misleading one. (The BG number keeps
+    // showing the last value once stale; the projection doesn't, since extrapolating from old points misleads.)
     const uint32_t now = time(NULL);
     const uint32_t newest_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[s_graph_count - 1] * 60;
     const int age_min = (int)(((int64_t)now - (int64_t)newest_ts) / 60);
     if (age_min >= STALE_MINUTES) return;
 
-    // Anchor on the newest reading's ACTUAL position on the trace, so the arrow is a true continuation
+    // Anchor on the newest reading's ACTUAL position on the trace, so the projection is a true continuation
     // (collinear with the last segment) rather than a parallel-shifted copy — the point drifts left as it
-    // ages, and the arrow follows. newest_x is computed exactly as the graph plots that point. The graph's
+    // ages, and the projection follows. newest_x is computed exactly as the graph plots that point. The graph's
     // own px/min and px/value set the angle; this layer spans the full width and the graph (time axis) is
     // its left NUM/DEN.
     const GRect bounds = layer_get_bounds(layer);
@@ -368,7 +358,7 @@ static void arrow_layer_update_proc(Layer *layer, GContext *ctx) {
     const float px_per_wire = (float)GRAPH_BAND_H / (GRAPH_VALUE_MAX - GRAPH_VALUE_MIN);
     const GPoint pivot =
         GPoint(newest_x, yoff + graph_value_to_y(GRAPH_BAND_H, s_graph_bg_values[s_graph_count - 1]));
-    trend_draw_arrow(ctx, bounds, pivot, slope, px_per_min, px_per_wire);
+    trend_draw_projection(ctx, bounds, pivot, slope, px_per_min, px_per_wire);
 }
 
 static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
@@ -381,7 +371,7 @@ static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     // Redraw the graph too: point x-positions are computed from the current time, so without this the
     // trace freezes between the 5-min pushes (doesn't creep left, old points don't fall off the edge).
     if (s_graph_layer) layer_mark_dirty(s_graph_layer);
-    if (s_arrow_layer) layer_mark_dirty(s_arrow_layer); // arrows go stale on the same clock
+    if (s_trend_layer) layer_mark_dirty(s_trend_layer); // the projection goes stale on the same clock
 }
 
 // Persist the current reading + graph so relaunching the watchface (e.g. after the menu) shows it
@@ -466,7 +456,7 @@ static void new_data_callback(DictionaryIterator *iter, void *context) {
             }
             s_graph_count = count;
             if (s_graph_layer) layer_mark_dirty(s_graph_layer);
-            if (s_arrow_layer) layer_mark_dirty(s_arrow_layer); // new points -> recompute the trend
+            if (s_trend_layer) layer_mark_dirty(s_trend_layer); // new points -> recompute the trend
         }
     }
     Tuple *high_tuple = dict_find(iter, KEY_GRAPH_HIGH_LINE);
@@ -533,8 +523,8 @@ static void window_load(Window *window) {
 
     // Layout: BG (top) and time (bottom) share the same large font; time-ago top-left, IOB top-right;
     // the middle band's left 2/3 is the 2 h graph (status label overlaid on its bottom strip) and its
-    // right 1/3 is the trend arrow (issue #1). The graph/axis/arrow layers are all full screen width so
-    // edge dots and the arrow aren't clipped; each maps its own content into the left 2/3.
+    // right 1/3 is the trend projection (issue #1). The graph/axis/trend layers are all full screen width
+    // so edge points and the projection aren't clipped; each maps its own content into the left 2/3.
 
     // BG value — top, centered, large.
     s_bg_layer = make_label(root, GRect(0, -6, b.size.w, 42),
@@ -550,14 +540,14 @@ static void window_load(Window *window) {
     // graph still shows the axes. Aligned to the graph band so its y matches the dots.
     s_axis_layer = make_layer(root, GRect(0, GRAPH_TOP_Y, b.size.w, GRAPH_BAND_H), axis_layer_update_proc);
 
-    // BG graph — middle band. Dots only (see graph_layer_update_proc); full width so the newest dot at
-    // the right edge of the 2 h area isn't clipped.
+    // BG graph — middle band. Connected line (see graph_layer_update_proc); full width so the newest
+    // point at the right edge of the 2 h area isn't clipped.
     s_graph_layer = make_layer(root, GRect(0, GRAPH_TOP_Y, b.size.w, GRAPH_BAND_H), graph_layer_update_proc);
 
-    // Trend arrow — full screen width so it can anchor on the newest trace point (which sits in the
+    // Trend projection — full screen width so it can anchor on the newest trace point (which sits in the
     // graph's left 2/3) and extend into the right third; a little taller than the graph band for
-    // headroom. Draws only the arrow (rest transparent), on top of the graph.
-    s_arrow_layer = make_layer(root, GRect(0, ARROW_TOP_Y, b.size.w, ARROW_BAND_H), arrow_layer_update_proc);
+    // headroom. Draws only the dotted line (rest transparent), on top of the graph.
+    s_trend_layer = make_layer(root, GRect(0, TREND_TOP_Y, b.size.w, TREND_BAND_H), trend_layer_update_proc);
 
     // Pump status — a full-width band + text painted low over the graph (see status_layer_update_proc).
     // Added after the graph so it draws on top; the time (added next) still draws over its bottom edge.
@@ -587,7 +577,7 @@ static void window_unload(Window *window) {
     text_layer_destroy(s_date_layer);
     layer_destroy(s_axis_layer);
     layer_destroy(s_graph_layer);
-    layer_destroy(s_arrow_layer);
+    layer_destroy(s_trend_layer);
 }
 
 static void init_test_mode_data(void) {
