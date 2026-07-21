@@ -32,7 +32,7 @@ Each watchface has a UUID, which the sender must target. To support arbitrary wa
 | 12 | DELTA_STRING | string | Formatted BG change from previous reading, e.g. `"+0.3"`. |
 | 13 | TREND_ARROW | uint8 | Trend arrow index, see below. |
 | 14 | IOB_STRING | string | Formatted insulin-on-board, e.g. `"2.5"`. |
-| 15 | STATUS_STRING | string | Any sensor/pump status text, e.g. `"SUSPENDED"`, `"NO SIGNAL"`, etc. |
+| 15 | STATUS_STRING | string | Any sensor/pump status text, e.g. `"SUSPENDED"`, `"NO SIGNAL"`, etc. The sender may also set it to `"BG"` to indicate the current `BG_STRING` is a manually-entered fingerstick shown in place of sensor glucose (no separate marker key — the watchface just renders the text). |
 | 16 | SENDER_BATTERY | uint8 | Sender battery level, 0–100. |
 | 2 | GRAPH_HOURS | uint8 | Active graph window, in hours (≤ the watchface's announced max). The watchface uses this as its time axis directly, so the window follows the sender's setting immediately and the trace fills in as data arrives — rather than the watchface inferring the span from the data it happens to hold. |
 | 17 | GRAPH_DATA | bytes | Recent BG history for the graph (see format below). |
