@@ -142,7 +142,9 @@ static void update_bg_display(void) {
     // sat on screen for ~8 h during an overnight outage). The "ago" label still conveys how old it is.
     // While fresh, show verbatim what the phone sent: "---" appears only when the phone sends it (the
     // pump has no sensor value), so the watch never invents it -- every "---" mirrors the pump.
-    text_layer_set_text(s_bg_layer, is_stale() ? "" : s_bg_string);
+    // Guard the layer: a data message can arrive before window_load creates it (the on-watch sender
+    // injects with zero latency, unlike a phone's), and text_layer_set_text(NULL,..) hard-faults.
+    if (s_bg_layer) text_layer_set_text(s_bg_layer, is_stale() ? "" : s_bg_string);
 }
 
 static void update_ago_display(void) {
@@ -156,7 +158,7 @@ static void update_ago_display(void) {
     } else {
         snprintf(s_ago_display, sizeof(s_ago_display), STR_AGO_HOURS_FMT, mins / 60);
     }
-    text_layer_set_text(s_ago_layer, s_ago_display);
+    if (s_ago_layer) text_layer_set_text(s_ago_layer, s_ago_display);
 }
 
 static void update_iob_display(void) {
@@ -167,7 +169,7 @@ static void update_iob_display(void) {
     } else {
         snprintf(s_iob_display, sizeof(s_iob_display), STR_IOB_FMT, s_iob_string);
     }
-    text_layer_set_text(s_iob_layer, s_iob_display);
+    if (s_iob_layer) text_layer_set_text(s_iob_layer, s_iob_display);
 }
 
 static void update_time_and_date(void) {
@@ -176,8 +178,11 @@ static void update_time_and_date(void) {
     strftime(s_time_display, sizeof(s_time_display),
              clock_is_24h_style() ? STR_TIME_24H_FMT : STR_TIME_12H_FMT, t);
     strftime(s_date_display, sizeof(s_date_display), STR_DATE_FMT, t);
-    text_layer_set_text(s_time_layer, s_time_display);
-    text_layer_set_text(s_date_layer, s_date_display);
+    // Guarded for the same reason as the BG/ago/IOB layers: the tick is subscribed before
+    // window_load creates the layers, so a tick landing in the launch gap would hit
+    // text_layer_set_text(NULL,..) and hard-fault. window_load re-renders, so nothing is lost.
+    if (s_time_layer) text_layer_set_text(s_time_layer, s_time_display);
+    if (s_date_layer) text_layer_set_text(s_date_layer, s_date_display);
 }
 
 // The status label overlays the bottom of the graph as an opaque strip, but only when a status is
