@@ -275,8 +275,19 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
         const int mins_ago = (int)(((int64_t)now - (int64_t)pt_ts) / 60);
         const int x = w - (mins_ago * w) / graph_minutes;
         const int y = graph_value_to_y(h, s_graph_bg_values[i]);
-        if (have_prev && (int)s_graph_offsets[i] - prev_off <= GRAPH_GAP_THRESHOLD_MINUTES) {
+        // Offsets ascend, so both gaps are simple subtractions.
+        const bool join_prev =
+            have_prev && (int)s_graph_offsets[i] - prev_off <= GRAPH_GAP_THRESHOLD_MINUTES;
+        const bool join_next =
+            i + 1 < s_graph_count &&
+            (int)s_graph_offsets[i + 1] - (int)s_graph_offsets[i] <= GRAPH_GAP_THRESHOLD_MINUTES;
+        if (join_prev) {
             graphics_draw_line(ctx, GPoint(prev_x, prev_y), GPoint(x, y));
+        } else if (!join_next) {
+            // A gap on both sides: no segment will ever be drawn for this reading, so draw a dot or it
+            // vanishes entirely. Fill colour set explicitly — the loop above only sets stroke.
+            graphics_context_set_fill_color(ctx, GColorBlack);
+            graphics_fill_circle(ctx, GPoint(x, y), 2);
         }
         have_prev = true;
         prev_x = x;
