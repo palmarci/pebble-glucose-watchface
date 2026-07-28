@@ -1,72 +1,29 @@
 {
-  "name": "xdrip-pebble-reference-watchface",
+  "name": "minimed-pebble-watchface",
   "author": "Morten Fyhn Amundsen",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "keywords": ["pebble-app"],
   "private": true,
   "dependencies": {},
   "pebble": {
-    "displayName": "xDrip Reference Watchface",
-    "uuid": "95190d49-16be-4e33-b112-d14fa22fb6eb",
+    "displayName": "MiniMed BG",
+    "uuid": "567a3f6e-97d0-4f3a-b63f-916a8213d284",
     "sdkVersion": "3",
     "enableMultiJS": false,
-    "targetPlatforms": [
-      "flint"
-    ],
+    "targetPlatforms": ["flint", "emery"],
     "watchapp": {
       "watchface": true
     },
-    "messageKeys": {
-      "ProtocolVersion": 0,
-      "Capabilities": 1,
-      "GraphHours": 2,
-      "BgTimestamp": 10,
-      "BgString": 11,
-      "DeltaString": 12,
-      "ArrowIndex": 13,
-      "GraphData": 14,
-      "GraphHighLine": 15,
-      "GraphLowLine": 16,
-      "PhoneBattery": 17
+    "companionApp": {
+      "android": {
+        "url": "https://github.com/mortenfyhn/minimed-pebble-bridge",
+        "apps": [
+          { "package": "com.mortenfyhn.minimedpebble" }
+        ]
+      }
     },
     "resources": {
-      "media": [
-        {
-          "type": "png",
-          "name": "ARROW_UP_DOUBLE",
-          "file": "images/arrow_up_double.png"
-        },
-        {
-          "type": "png",
-          "name": "ARROW_UP",
-          "file": "images/arrow_up.png"
-        },
-        {
-          "type": "png",
-          "name": "ARROW_UP_SLANT",
-          "file": "images/arrow_up_slant.png"
-        },
-        {
-          "type": "png",
-          "name": "ARROW_FLAT",
-          "file": "images/arrow_flat.png"
-        },
-        {
-          "type": "png",
-          "name": "ARROW_DOWN_SLANT",
-          "file": "images/arrow_down_slant.png"
-        },
-        {
-          "type": "png",
-          "name": "ARROW_DOWN",
-          "file": "images/arrow_down.png"
-        },
-        {
-          "type": "png",
-          "name": "ARROW_DOWN_DOUBLE",
-          "file": "images/arrow_down_double.png"
-        }
-      ]
+      "media": []
     }
   }
 }

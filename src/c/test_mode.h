@@ -1,18 +1,15 @@
-// For testing with dummy data in emulator.
-// Separate file to avoid diff in main file when testing.
+// Compile-time dummy data so the watchface can be verified in the emulator
+// without a phone. Enable by building with TEST_MODE defined, e.g.:
+//   pebble build -- -DTEST_MODE
+// Left disabled by default.
 
 #pragma once
 
-// Uncomment to enable test mode
 // #define TEST_MODE
 
-#define TEST_BG_STRING "10.2"
-#define TEST_DELTA_STRING "+0.3"
-#define TEST_MINUTES_AGO 6
-#define TEST_ARROW_INDEX 4 // 4 = flat arrow
-
-// Test graph data: simulates 3 hours of data with some variation
-// This will create a nice curve to visualize
-#define TEST_GRAPH_COUNT 36
-// Offsets: 0, 5, 10, 15, ... 175 minutes (every 5 minutes for 3 hours)
-// BG values: oscillating between ~100-200 mg/dL to show variation
+#ifdef TEST_MODE
+#define TEST_BG_STRING "7.5"
+#define TEST_MINUTES_AGO 2
+#define TEST_IOB_STRING "2.5"
+#define TEST_STATUS_STRING "" // "" = full graph shows; set e.g. "SUSPENDED" to test the overlay
+#endif
