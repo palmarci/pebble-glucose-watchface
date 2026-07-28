@@ -36,20 +36,24 @@
 #define GRAPH_WINDOW_HOURS 2
 #define GRAPH_WIDTH_NUM 2 // graph width = screen width * NUM/DEN; the rest is the projection region
 #define GRAPH_WIDTH_DEN 3
-// The graph band and the projection band share these so the projection pivot lands exactly on the graph
-// trace. The projection band is taller than the graph band (extends above and below it) so a projection
-// running out from a reading near the top/bottom of the range has room; its length is clamped to this band
-// so it never runs off and vanishes. It sits behind the time/BG text, which stay on top.
-#define GRAPH_TOP_Y 38
+// The value band: BG values map into these GRAPH_BAND_H pixels, starting at this screen y.
+#define GRAPH_BAND_TOP_Y 38
 #define GRAPH_BAND_H 64
-#define TREND_TOP_Y 30
-#define TREND_BAND_H 86
+// The layer is taller than the value band so a projection leaving a reading near the top or bottom of
+// the range has somewhere to go instead of being clipped away (its length is clamped to the layer, so
+// it shortens rather than vanishing). Asymmetric: more spare screen below the band than above it.
+#define GRAPH_PAD_TOP 8
+#define GRAPH_PAD_BOTTOM 14
+// Derived. Axes, trace and projection all live in this one layer, so there is a single coordinate space
+// and the projection pivot cannot drift off the trace. It sits behind the time/BG text, which stay on top.
+#define GRAPH_LAYER_TOP_Y (GRAPH_BAND_TOP_Y - GRAPH_PAD_TOP)
+#define GRAPH_LAYER_H (GRAPH_PAD_TOP + GRAPH_BAND_H + GRAPH_PAD_BOTTOM)
 
 // Trend projection (issue #1). Extrapolated on-watch from recent BG, NOT read from the pump. Its angle is
 // the graph's own visual slope (same px/min and px/value as the trace), so it lies tangent to how the
 // line would continue from the latest point — not an arbitrary rate->angle mapping. Drawn as a dotted line
-// so it reads clearly as a projection, distinct from the solid data trace. See trend_layer_update_proc for
-// the slope estimator and why it was chosen.
+// so it reads clearly as a projection, distinct from the solid data trace. See draw_projection for the
+// slope estimator and why it was chosen.
 #define TREND_MAX_GAP_MINUTES 15 // ignore the last two points if a sensor gap wider than this separates them
 #define TREND_PROJ_LEN 12        // projection length start-to-end in px (clamped to stay inside the band)
 #define TREND_PROJ_GAP 6         // gap (px) between the trace's last point and the projection start
@@ -88,9 +92,7 @@ static TextLayer *s_iob_layer;
 static Layer *s_status_layer;
 static TextLayer *s_time_layer;
 static TextLayer *s_date_layer;
-static Layer *s_axis_layer;
-static Layer *s_graph_layer;
-static Layer *s_trend_layer;
+static Layer *s_graph_layer; // axes, trace and projection all draw here
 
 // Latest reading from the phone.
 static char s_bg_string[16] = ""; // whatever the phone last sent; "" until the first reading arrives
@@ -219,26 +221,25 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
-// Map a BG value (mg/dL / 2) to a y within the graph, clamping to the fixed range.
-static int graph_value_to_y(int16_t height, int bg) {
+// Map a BG value (mg/dL / 2) to a y inside the graph layer, clamping to the fixed range. The only place
+// that knows where the value band sits within the layer, so axes, trace and projection cannot disagree.
+static int graph_y(int bg) {
     if (bg < GRAPH_VALUE_MIN) bg = GRAPH_VALUE_MIN;
     if (bg > GRAPH_VALUE_MAX) bg = GRAPH_VALUE_MAX;
-    return height - ((bg - GRAPH_VALUE_MIN) * height) / (GRAPH_VALUE_MAX - GRAPH_VALUE_MIN);
+    return GRAPH_PAD_TOP + GRAPH_BAND_H -
+           ((bg - GRAPH_VALUE_MIN) * GRAPH_BAND_H) / (GRAPH_VALUE_MAX - GRAPH_VALUE_MIN);
 }
 
-// Static graph axes — the target lines and hour ticks — drawn independent of the BG data, so an empty
-// graph still shows "axes waiting for data". Full screen width: the target lines are pure value
-// thresholds with no x-meaning, so they span everything. The hour ticks belong to the time axis, which
-// only exists over the graph region (left 2/3) — the right 1/3 is the trend projection, not past time —
-// so ticks stop there. Drawn behind the trace and projection.
-static void axis_layer_update_proc(Layer *layer, GContext *ctx) {
-    const GRect b = layer_get_bounds(layer);
-    const int w = b.size.w; // full screen width
-    const int h = b.size.h; // == GRAPH_BAND_H, so y matches the dots
+// The static axes — target lines and hour ticks — drawn independent of the BG data, so an empty graph
+// still shows "axes waiting for data". Full layer width: the target lines are pure value thresholds with
+// no x-meaning, so they span everything. The hour ticks belong to the time axis, which only exists over
+// the graph region (left 2/3) — the right 1/3 is projection space, not past time — so ticks stop there.
+static void draw_axes(GContext *ctx, GRect bounds) {
+    const int w = bounds.size.w;
 
     graphics_context_set_fill_color(ctx, GColorBlack);
-    const int high_y = graph_value_to_y(h, s_graph_high_line);
-    const int low_y = graph_value_to_y(h, s_graph_low_line);
+    const int high_y = graph_y(s_graph_high_line);
+    const int low_y = graph_y(s_graph_low_line);
     graphics_fill_rect(ctx, GRect(0, high_y, w, 1), 0, GCornerNone);
     graphics_fill_rect(ctx, GRect(0, low_y, w, 1), 0, GCornerNone);
 
@@ -251,13 +252,12 @@ static void axis_layer_update_proc(Layer *layer, GContext *ctx) {
     }
 }
 
-static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
+static void draw_trace(GContext *ctx, GRect bounds) {
     if (s_graph_count == 0) {
         return;
     }
-    const GRect b = layer_get_bounds(layer);
-    const int16_t w = b.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN; // time-axis width; layer spans full
-    const int16_t h = b.size.h;                                     // width so edge dots aren't clipped
+    // Time-axis width; the layer spans the full screen so edge points aren't clipped.
+    const int16_t w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
     const uint32_t now = time(NULL);
     const int graph_minutes = GRAPH_WINDOW_HOURS * 60;
 
@@ -274,7 +274,7 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
         const uint32_t pt_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[i] * 60;
         const int mins_ago = (int)(((int64_t)now - (int64_t)pt_ts) / 60);
         const int x = w - (mins_ago * w) / graph_minutes;
-        const int y = graph_value_to_y(h, s_graph_bg_values[i]);
+        const int y = graph_y(s_graph_bg_values[i]);
         // Offsets ascend, so both gaps are simple subtractions.
         const bool join_prev =
             have_prev && (int)s_graph_offsets[i] - prev_off <= GRAPH_GAP_THRESHOLD_MINUTES;
@@ -355,9 +355,7 @@ static void trend_draw_projection(GContext *ctx, GRect bounds, GPoint pivot, flo
     }
 }
 
-static void trend_layer_update_proc(Layer *layer, GContext *ctx) {
-    const int yoff = GRAPH_TOP_Y - TREND_TOP_Y; // this band sits a little higher than the graph band
-
+static void draw_projection(GContext *ctx, GRect bounds) {
     // Estimator chosen after a July 2026 soak: the plain last-two-points slope. It's the most responsive
     // and, extended tangent to the trace, matched the eye best. The smoothed alternatives soaked
     // alongside it — an exp-weighted regression and a quadratic slope-at-latest — lagged real turns and
@@ -375,18 +373,24 @@ static void trend_layer_update_proc(Layer *layer, GContext *ctx) {
 
     // Anchor on the newest reading's ACTUAL position on the trace, so the projection is a true continuation
     // (collinear with the last segment) rather than a parallel-shifted copy — the point drifts left as it
-    // ages, and the projection follows. newest_x is computed exactly as the graph plots that point. The graph's
-    // own px/min and px/value set the angle; this layer spans the full width and the graph (time axis) is
-    // its left NUM/DEN.
-    const GRect bounds = layer_get_bounds(layer);
+    // ages, and the projection follows. newest_x and graph_y() are exactly what draw_trace uses to plot
+    // that point, so the pivot lands on it by construction. The graph's own px/min and px/value set the
+    // angle; the time axis is the layer's left NUM/DEN and the projection runs into the rest.
     const int graph_w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
     const int graph_minutes = GRAPH_WINDOW_HOURS * 60;
     const int newest_x = graph_w - (age_min * graph_w) / graph_minutes;
     const float px_per_min = (float)graph_w / graph_minutes;
     const float px_per_wire = (float)GRAPH_BAND_H / (GRAPH_VALUE_MAX - GRAPH_VALUE_MIN);
-    const GPoint pivot =
-        GPoint(newest_x, yoff + graph_value_to_y(GRAPH_BAND_H, s_graph_bg_values[s_graph_count - 1]));
+    const GPoint pivot = GPoint(newest_x, graph_y(s_graph_bg_values[s_graph_count - 1]));
     trend_draw_projection(ctx, bounds, pivot, slope, px_per_min, px_per_wire);
+}
+
+// Axes behind the trace, projection on top of both.
+static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
+    const GRect bounds = layer_get_bounds(layer);
+    draw_axes(ctx, bounds);
+    draw_trace(ctx, bounds);
+    draw_projection(ctx, bounds);
 }
 
 static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
@@ -398,8 +402,7 @@ static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     update_iob_display();
     // Redraw the graph too: point x-positions are computed from the current time, so without this the
     // trace freezes between the 5-min pushes (doesn't creep left, old points don't fall off the edge).
-    if (s_graph_layer) layer_mark_dirty(s_graph_layer);
-    if (s_trend_layer) layer_mark_dirty(s_trend_layer); // the projection goes stale on the same clock
+    if (s_graph_layer) layer_mark_dirty(s_graph_layer); // trace scrolls and the projection goes stale together
 }
 
 // Persist the current reading + graph so relaunching the watchface (e.g. after the menu) shows it
@@ -483,15 +486,14 @@ static void new_data_callback(DictionaryIterator *iter, void *context) {
                 s_graph_bg_values[i] = d[6 + count * 2 + i];
             }
             s_graph_count = count;
-            if (s_graph_layer) layer_mark_dirty(s_graph_layer);
-            if (s_trend_layer) layer_mark_dirty(s_trend_layer); // new points -> recompute the trend
+            if (s_graph_layer) layer_mark_dirty(s_graph_layer); // new points -> retrace and recompute the trend
         }
     }
     Tuple *high_tuple = dict_find(iter, KEY_GRAPH_HIGH_LINE);
     if (high_tuple) s_graph_high_line = high_tuple->value->uint8;
     Tuple *low_tuple = dict_find(iter, KEY_GRAPH_LOW_LINE);
     if (low_tuple) s_graph_low_line = low_tuple->value->uint8;
-    if ((high_tuple || low_tuple) && s_axis_layer) layer_mark_dirty(s_axis_layer);
+    if ((high_tuple || low_tuple) && s_graph_layer) layer_mark_dirty(s_graph_layer);
     // KEY_GRAPH_HOURS from the phone is ignored: the visible window is fixed to GRAPH_WINDOW_HOURS.
 
     APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s (ts=%lu) IOB: %s graph=%d", s_bg_string,
@@ -564,18 +566,11 @@ static void window_load(Window *window) {
     s_iob_layer = make_label(root, GRect(b.size.w - 68, 4, 64, 26),
                              FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentRight);
 
-    // Static axes (target lines + hour ticks) — full screen width, drawn behind everything so an empty
-    // graph still shows the axes. Aligned to the graph band so its y matches the dots.
-    s_axis_layer = make_layer(root, GRect(0, GRAPH_TOP_Y, b.size.w, GRAPH_BAND_H), axis_layer_update_proc);
-
-    // BG graph — middle band. Connected line (see graph_layer_update_proc); full width so the newest
-    // point at the right edge of the 2 h area isn't clipped.
-    s_graph_layer = make_layer(root, GRect(0, GRAPH_TOP_Y, b.size.w, GRAPH_BAND_H), graph_layer_update_proc);
-
-    // Trend projection — full screen width so it can anchor on the newest trace point (which sits in the
-    // graph's left 2/3) and extend into the right third; a little taller than the graph band for
-    // headroom. Draws only the dotted line (rest transparent), on top of the graph.
-    s_trend_layer = make_layer(root, GRect(0, TREND_TOP_Y, b.size.w, TREND_BAND_H), trend_layer_update_proc);
+    // The graph — axes, trace and projection in one layer (see graph_layer_update_proc). Full screen
+    // width so the newest point at the right edge of the 2 h area isn't clipped and the projection can
+    // run into the remaining third; taller than the value band for projection headroom.
+    s_graph_layer =
+        make_layer(root, GRect(0, GRAPH_LAYER_TOP_Y, b.size.w, GRAPH_LAYER_H), graph_layer_update_proc);
 
     // Pump status — a full-width band + text painted low over the graph (see status_layer_update_proc).
     // Added after the graph so it draws on top; the time (added next) still draws over its bottom edge.
@@ -603,9 +598,7 @@ static void window_unload(Window *window) {
     layer_destroy(s_status_layer);
     text_layer_destroy(s_time_layer);
     text_layer_destroy(s_date_layer);
-    layer_destroy(s_axis_layer);
     layer_destroy(s_graph_layer);
-    layer_destroy(s_trend_layer);
 }
 
 static void init_test_mode_data(void) {
