@@ -49,6 +49,14 @@ static inline char *safe_strncpy(char *dest, const char *src, size_t count) {
     return dest;
 }
 
+// Like safe_strncpy but dest size is inferred via sizeof.
+// Compile-time error if dest is a pointer (must be an array).
+#define STRCPY(dest, src) (                                                     \
+    (dest)[0] = (dest)[0],                                                      \
+    (void)sizeof(char[1 - 2 * __builtin_types_compatible_p(                     \
+        typeof(dest), typeof(&(dest)[0]))]),                                    \
+    safe_strncpy(dest, src, sizeof(dest)))
+
 static void update_displayed_time_ago(void) {
     // Don't populate until we have valid data.
     if (s_bg_timestamp == 0) {
@@ -57,7 +65,8 @@ static void update_displayed_time_ago(void) {
 
     const int minutes_ago = (time(NULL) - s_bg_timestamp) / 60;
     if (minutes_ago < 6) {
-        s_time_ago_buffer[0] = '\0';
+        // s_time_ago_buffer[0] = '\0';
+        snprintf(s_time_ago_buffer, sizeof(s_time_ago_buffer), "%dm", minutes_ago);
     } else if (minutes_ago < 60) {
         snprintf(s_time_ago_buffer, sizeof(s_time_ago_buffer), "%dm", minutes_ago);
     } else {
@@ -67,6 +76,11 @@ static void update_displayed_time_ago(void) {
 }
 
 static void update_displayed_xdrip_data(void) {
+    const int minutes_ago = (time(NULL) - s_bg_timestamp) / 60;
+    if (minutes_ago > 3) {
+        safe_strncpy(s_bg_string, "---", sizeof(s_bg_string));
+    }
+
     // Update displayed BG value
     text_layer_set_text(s_bg_layer, s_bg_string);
 
@@ -112,6 +126,9 @@ static void draw_high_low_lines(GContext *ctx, const struct GraphParams p) {
     graphics_fill_rect(ctx, GRect(0, low_y, p.layer_width, line_width), 0, GCornerNone);
 }
 
+// Don't connect points that are more than this many minutes apart
+#define GRAPH_GAP_THRESHOLD_MINUTES 15
+
 static void draw_bg_graph_line(GContext *ctx, const struct GraphParams p) {
 
     graphics_context_set_stroke_width(ctx, 3);
@@ -119,37 +136,43 @@ static void draw_bg_graph_line(GContext *ctx, const struct GraphParams p) {
     const uint32_t now = time(NULL);
     const int graph_minutes = GRAPH_HOURS * 60;
 
-    // TODO datatype?
     int prev_x = 0;
     int prev_y = 0;
+    bool has_prev = false;
 
     for (int i = 0; i < s_graph_count; i++) {
-        // Calculate absolute timestamp of this point
         const uint32_t point_timestamp = s_graph_ref_timestamp + (s_graph_offsets[i] * 60);
-
-        // Calculate how many minutes ago this point was from now
         const int minutes_ago = (now - point_timestamp) / 60;
 
-        // Skip points that are too old (off the left edge)
         if (minutes_ago > graph_minutes + 10) {
+            has_prev = false;
             continue;
         }
 
-        // X position: right edge = 0 min ago, left edge = graph_minutes ago
         const int x = p.graph_width - ((minutes_ago * p.graph_width) / graph_minutes);
-
-        // Y position: inverted (high BG at top)
         const int y = p.layer_height - ((s_graph_bg_values[i] - p.value_min) * p.layer_height) /
                                            (p.value_max - p.value_min);
 
-        // Need two points to draw a line, so skip first point
-        if (i > 0) {
-            // Draw line connecting to previous point
+        // Check if next point is close enough to connect
+        bool has_next = false;
+        if (i + 1 < s_graph_count) {
+            const uint32_t next_timestamp = s_graph_ref_timestamp + (s_graph_offsets[i + 1] * 60);
+            const int gap_minutes = (next_timestamp > point_timestamp)
+                ? (next_timestamp - point_timestamp) / 60
+                : (point_timestamp - next_timestamp) / 60;
+            has_next = gap_minutes <= GRAPH_GAP_THRESHOLD_MINUTES;
+        }
+
+        if (has_prev) {
             graphics_draw_line(ctx, GPoint(prev_x, prev_y), GPoint(x, y));
+        } else if (!has_next) {
+            // Isolated point — draw a dot
+            graphics_fill_circle(ctx, GPoint(x, y), 2);
         }
 
         prev_x = x;
         prev_y = y;
+        has_prev = has_next;
     }
 }
 
