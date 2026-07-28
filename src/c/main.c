@@ -113,9 +113,21 @@ static char s_time_display[8];
 static char s_date_display[16];
 
 static void safe_strncpy(char *dst, const char *src, size_t dst_size) {
-    strncpy(dst, src, dst_size - 1);
-    dst[dst_size - 1] = '\0';
+    if (dst_size > 0) {
+        strncpy(dst, src, dst_size - 1);
+        dst[dst_size - 1] = '\0';
+    }
 }
+
+// Like safe_strncpy but the destination size is inferred with sizeof. Compile-time error if dst is a
+// pointer rather than an array, which is the case sizeof would silently get wrong: the negative array
+// size below is only well-formed when the two types differ. __typeof__ rather than typeof because the
+// SDK compiles with -std=c99, where the unprefixed spelling isn't a keyword.
+#define STRCPY(dst, src)                                                                           \
+    ((dst)[0] = (dst)[0],                                                                          \
+     (void)sizeof(char[1 - 2 * __builtin_types_compatible_p(__typeof__(dst),                       \
+                                                            __typeof__(&(dst)[0]))]),              \
+     safe_strncpy(dst, src, sizeof(dst)))
 
 static bool has_reading(void) {
     return s_bg_timestamp != 0;
@@ -424,7 +436,7 @@ static void new_data_callback(DictionaryIterator *iter, void *context) {
     Tuple *bg_tuple = dict_find(iter, KEY_BG_STRING);
     Tuple *ts_tuple = dict_find(iter, KEY_BG_TIMESTAMP);
     if (bg_tuple) {
-        safe_strncpy(s_bg_string, bg_tuple->value->cstring, sizeof(s_bg_string));
+        STRCPY(s_bg_string, bg_tuple->value->cstring);
     }
     if (ts_tuple) {
         s_bg_timestamp = ts_tuple->value->uint32;
@@ -434,13 +446,13 @@ static void new_data_callback(DictionaryIterator *iter, void *context) {
 
     Tuple *iob_tuple = dict_find(iter, KEY_IOB_STRING);
     if (iob_tuple) {
-        safe_strncpy(s_iob_string, iob_tuple->value->cstring, sizeof(s_iob_string));
+        STRCPY(s_iob_string, iob_tuple->value->cstring);
         update_iob_display();
     }
 
     Tuple *status_tuple = dict_find(iter, KEY_STATUS_STRING);
     if (status_tuple) {
-        safe_strncpy(s_status_string, status_tuple->value->cstring, sizeof(s_status_string));
+        STRCPY(s_status_string, status_tuple->value->cstring);
         update_status_display();
     }
 
@@ -587,10 +599,10 @@ static void window_unload(Window *window) {
 
 static void init_test_mode_data(void) {
 #ifdef TEST_MODE
-    safe_strncpy(s_bg_string, TEST_BG_STRING, sizeof(s_bg_string));
+    STRCPY(s_bg_string, TEST_BG_STRING);
     s_bg_timestamp = time(NULL) - TEST_MINUTES_AGO * 60;
-    safe_strncpy(s_iob_string, TEST_IOB_STRING, sizeof(s_iob_string));
-    safe_strncpy(s_status_string, TEST_STATUS_STRING, sizeof(s_status_string));
+    STRCPY(s_iob_string, TEST_IOB_STRING);
+    STRCPY(s_status_string, TEST_STATUS_STRING);
     // Dummy 3-hour graph: a triangle wave ~70..190 mg/dL (crosses the 4.0 & 10.0 target lines).
     s_graph_ref_timestamp = time(NULL) - (uint32_t)3 * 3600;
     s_graph_count = 36; // 3 h @ 5 min
