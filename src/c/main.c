@@ -76,14 +76,13 @@
 
 // Status strip: a full-width opaque white band hugging the status text, sitting low over the graph so
 // its uppercase letters land ~2px above the time. Custom-drawn (not a TextLayer background) so the
-// band can be full width yet vertically tight to the caps. All in screen coords; the layer is a plain
-// overlay over the graph that paints only the band + text (rest transparent, so the graph shows).
+// band can be full width yet vertically tight to the caps. Layer-local coords, like every other layer
+// here; it paints only the band + text, leaving the rest transparent so the graph shows through.
 #define STATUS_FONT FONT_KEY_GOTHIC_18_BOLD
-#define STATUS_LAYER_TOP 78 // overlay-layer top (screen y); gives graphics_draw_text room to render
-#define STATUS_LAYER_H 36
-#define STATUS_BAND_TOP 96 // white band top (~2px above the caps)
-#define STATUS_BAND_H 17   // band height (caps + a little room)
-#define STATUS_TEXT_TOP 92 // text box top; the font's top padding drops the glyphs into the band
+#define STATUS_TOP_Y 92        // layer top (screen y), which is also the text box's top
+#define STATUS_H 24            // one line of STATUS_FONT, with room for descenders
+#define STATUS_BAND_OFFSET_Y 4 // band top within the layer; the font's top padding drops the caps into it
+#define STATUS_BAND_H 17       // band height (caps + a little room)
 
 static Window *s_window;
 static TextLayer *s_bg_layer;
@@ -206,19 +205,18 @@ static void update_status_display(void) {
 }
 
 // Paints only the band + text (when a status is active); everything else stays transparent so the
-// graph below shows through. Coords are layer-relative (layer top = STATUS_LAYER_TOP screen y).
+// graph below shows through. All coords are layer-relative.
 static void status_layer_update_proc(Layer *layer, GContext *ctx) {
     if (s_status_string[0] == '\0') {
         return;
     }
     const int16_t w = layer_get_bounds(layer).size.w;
     graphics_context_set_fill_color(ctx, GColorWhite);
-    graphics_fill_rect(ctx, GRect(0, STATUS_BAND_TOP - STATUS_LAYER_TOP, w, STATUS_BAND_H), 0,
-                       GCornerNone);
+    graphics_fill_rect(ctx, GRect(0, STATUS_BAND_OFFSET_Y, w, STATUS_BAND_H), 0, GCornerNone);
     graphics_context_set_text_color(ctx, GColorBlack);
     graphics_draw_text(ctx, s_status_string, fonts_get_system_font(STATUS_FONT),
-                       GRect(0, STATUS_TEXT_TOP - STATUS_LAYER_TOP, w, 24),
-                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+                       GRect(0, 0, w, STATUS_H), GTextOverflowModeTrailingEllipsis,
+                       GTextAlignmentCenter, NULL);
 }
 
 // Map a BG value (mg/dL / 2) to a y inside the graph layer, clamping to the fixed range. The only place
@@ -575,7 +573,7 @@ static void window_load(Window *window) {
     // Pump status — a full-width band + text painted low over the graph (see status_layer_update_proc).
     // Added after the graph so it draws on top; the time (added next) still draws over its bottom edge.
     s_status_layer =
-        make_layer(root, GRect(0, STATUS_LAYER_TOP, b.size.w, STATUS_LAYER_H), status_layer_update_proc);
+        make_layer(root, GRect(0, STATUS_TOP_Y, b.size.w, STATUS_H), status_layer_update_proc);
 
     // Current time — bottom, same large font as BG.
     s_time_layer = make_label(root, GRect(0, 105, b.size.w, 42),
