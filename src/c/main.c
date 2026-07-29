@@ -444,6 +444,31 @@ static void load_state(void) {
     }
 }
 
+// Graph wire format: [ref_ts u32 LE][count u16 LE][offset_min u16 LE ×n][bg u8 ×n]. Returns false and
+// leaves the graph untouched if the blob is short, so a truncated message can't half-update the trace:
+// everything is validated before anything is written. (Writing ref_ts before the length check plotted the
+// previous message's points against a new reference, shifting the whole trace in time.)
+static bool parse_graph_blob(const uint8_t *d, uint16_t len) {
+    if (len < 6) {
+        return false;
+    }
+    uint16_t count = d[4] | (d[5] << 8);
+    if (count > MAX_GRAPH_POINTS) count = MAX_GRAPH_POINTS;
+    if (len < (uint16_t)(6 + count * 3)) {
+        return false;
+    }
+    s_graph_ref_timestamp = d[0] | (d[1] << 8) | (d[2] << 16) | ((uint32_t)d[3] << 24);
+    for (int i = 0; i < count; i++) {
+        const int o = 6 + i * 2;
+        s_graph_offsets[i] = d[o] | (d[o + 1] << 8);
+    }
+    for (int i = 0; i < count; i++) {
+        s_graph_bg_values[i] = d[6 + count * 2 + i];
+    }
+    s_graph_count = count;
+    return true;
+}
+
 static void new_data_callback(DictionaryIterator *iter, void *context) {
     Tuple *bg_tuple = dict_find(iter, KEY_BG_STRING);
     Tuple *ts_tuple = dict_find(iter, KEY_BG_TIMESTAMP);
@@ -468,24 +493,9 @@ static void new_data_callback(DictionaryIterator *iter, void *context) {
         update_status_display();
     }
 
-    // Graph: [ref_ts u32 LE][count u16 LE][offset_min u16 LE ×n][bg u8 ×n].
     Tuple *graph_tuple = dict_find(iter, KEY_GRAPH_DATA);
-    if (graph_tuple && graph_tuple->length >= 6) {
-        const uint8_t *d = graph_tuple->value->data;
-        s_graph_ref_timestamp = d[0] | (d[1] << 8) | (d[2] << 16) | ((uint32_t)d[3] << 24);
-        uint16_t count = d[4] | (d[5] << 8);
-        if (count > MAX_GRAPH_POINTS) count = MAX_GRAPH_POINTS;
-        if (graph_tuple->length >= (uint16_t)(6 + count * 3)) {
-            for (int i = 0; i < count; i++) {
-                int o = 6 + i * 2;
-                s_graph_offsets[i] = d[o] | (d[o + 1] << 8);
-            }
-            for (int i = 0; i < count; i++) {
-                s_graph_bg_values[i] = d[6 + count * 2 + i];
-            }
-            s_graph_count = count;
-            if (s_graph_layer) layer_mark_dirty(s_graph_layer); // new points -> retrace and recompute the trend
-        }
+    if (graph_tuple && parse_graph_blob(graph_tuple->value->data, graph_tuple->length)) {
+        if (s_graph_layer) layer_mark_dirty(s_graph_layer); // new points -> retrace and recompute the trend
     }
     Tuple *high_tuple = dict_find(iter, KEY_GRAPH_HIGH_LINE);
     if (high_tuple) s_graph_high_line = high_tuple->value->uint8;
