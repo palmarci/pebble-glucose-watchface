@@ -1,6 +1,6 @@
-// Compile-time dummy data so the watchface can be verified in the emulator
-// without a phone. Enable by building with TEST_MODE defined, e.g.:
-//   pebble build -- -DTEST_MODE
+// Compile-time dummy data so the watchface can be verified in the emulator without a phone.
+// Enable by uncommenting TEST_MODE below and rebuilding. Note that `pebble build -- -DTEST_MODE`
+// does NOT work: this wscript doesn't forward the flag, so editing this file is the only way.
 // Left disabled by default.
 
 #pragma once

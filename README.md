@@ -1,40 +1,66 @@
-# MiniMed BG — Pebble watchface
+# Glucose — a Pebble watchface
 
-A minimal Pebble watchface that displays the current blood glucose value pushed
-from the [minimed-pebble-bridge](../minimed-pebble-bridge) Android app, which
-reads it directly from a Medtronic MiniMed pump over Bluetooth.
+Shows your current blood glucose, a two-hour graph with an extrapolated trend projection, insulin on
+board, and a status line — plus the time and date.
 
-This is an early proof of concept: it shows only the current BG number, how long
-ago it was received, and the time/date. Delta, trend arrow and graph are planned
-(the protocol keys are already reserved in `src/c/protocol.h`).
+The watchface is **source-agnostic**: it displays whatever a sender pushes to it over the
+[Pebble Glucose Protocol](docs/PEBBLE_GLUCOSE_PROTOCOL.md), and doesn't know or care whether the
+numbers came from a pump, a CGM, Nightscout or a file. It's also the protocol's reference
+implementation.
 
-## Data path
+## What it displays
 
-```
-MiniMed pump ──BLE/SAKE──▶ minimed-pebble-bridge (Android)
-    ──PebbleKit Android 2──▶ Pebble/Core app ──BLE──▶ this watchface
-```
+| Field | Source | If the sender omits it |
+|-------|--------|------------------------|
+| BG value | `BG_STRING`, pre-formatted by the sender in its own units | blank until the first reading |
+| Age of the reading | computed on-watch from `BG_TIMESTAMP` | hidden while under 6 minutes old |
+| Insulin on board | `IOB_STRING` | the top-right corner stays empty |
+| Status line | `STATUS_STRING` | no band is drawn, so the graph shows in full |
+| Graph | `GRAPH_DATA`, plus `GRAPH_HIGH_LINE` / `GRAPH_LOW_LINE` | axes only |
+| Trend projection | extrapolated on-watch from the last two graph points | nothing drawn |
 
-Glucose is formatted (mmol/L) on the Android side; the watchface just displays
-the string it receives (`KEY_BG_STRING`) and stamps it with `KEY_BG_TIMESTAMP`.
-After `STALE_MINUTES` with no fresh reading it shows `---`.
+The sender formats the values, so mmol/L and mg/dL both work with no setting on the watch. After 15
+minutes with no fresh reading the BG and IOB blank rather than showing a stale number, and the
+projection stops rather than extrapolating from old points.
 
-## Protocol
+Every field is optional, so a sender that only has a glucose value produces a clean
+glucose-and-time watchface with an empty graph. Nothing needs disabling.
 
-Raw integer AppMessage keys shared with the Android app (see `src/c/protocol.h`).
-The watchface sends a "ready" announcement (`KEY_PROTOCOL_VERSION`,
-`KEY_CAPABILITIES = CAP_BG`) on launch and on Bluetooth reconnect, which prompts
-the phone to push the latest reading immediately.
+## Using it with your own data source
 
-- **UUID:** `567a3f6e-97d0-4f3a-b63f-916a8213d284` (must match `APP_UUID` in the bridge app)
+Write a sender that speaks [the protocol](docs/PEBBLE_GLUCOSE_PROTOCOL.md) and targets this
+watchface's UUID, `567a3f6e-97d0-4f3a-b63f-916a8213d284`. The watchface announces which fields it
+wants on launch and on every Bluetooth reconnect; the sender replies with those fields, and pushes
+again whenever it has new data.
 
-## Build & test
+**Native Android senders need one extra step.** The Pebble/Core mobile app will not route
+AppMessages from an Android package that isn't listed under `companionApp` in this watchface's
+`package.json`, so a new native sender has to be added there — open an issue or a PR. Senders that
+aren't native Android apps aren't affected.
+
+The reference sender is
+[minimed-pebble-bridge](https://github.com/mortenfyhn/minimed-pebble-bridge), which reads a
+Medtronic MiniMed 780G directly over Bluetooth, fully offline.
+
+## Building
 
 ```sh
 pebble build
-pebble install --emulator flint     # Pebble 2 Duo target
+pebble install --emulator flint
 pebble screenshot --no-open --emulator flint
-pebble install --phone <phone-ip>   # real watch
 ```
 
-To preview without a phone, enable `#define TEST_MODE` in `src/c/test_mode.h`.
+Targets `flint` (Pebble 2 Duo) and `emery` (the emulator). To render dummy data in the emulator,
+uncomment `#define TEST_MODE` in `src/c/test_mode.h` and rebuild — passing `-DTEST_MODE` on the
+`pebble build` command line does **not** work with this wscript.
+
+## History
+
+This repo's history contains two earlier lines of development, merged rather than squashed so both
+stay intact: a hand-built xDrip reference watchface from January–February 2026, and the
+MiniMed-specific watchface from July 2026 that replaced it. `git log --graph` shows the two roots
+meeting.
+
+## Licence
+
+GPL-3.0.

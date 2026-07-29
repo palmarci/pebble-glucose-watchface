@@ -1,12 +1,11 @@
 {
-  "name": "minimed-pebble-watchface",
+  "name": "pebble-glucose-watchface",
   "author": "Morten Fyhn Amundsen",
   "version": "0.1.0",
   "keywords": ["pebble-app"],
-  "private": true,
   "dependencies": {},
   "pebble": {
-    "displayName": "MiniMed BG",
+    "displayName": "Glucose",
     "uuid": "567a3f6e-97d0-4f3a-b63f-916a8213d284",
     "sdkVersion": "3",
     "enableMultiJS": false,
@@ -14,6 +13,7 @@
     "watchapp": {
       "watchface": true
     },
+    "_companionAppNote": "Not just metadata: the Core app won't route AppMessages from an Android package that isn't listed here (minimed-pebble-bridge docs/FINDINGS.md). Any native Android sender must be added.",
     "companionApp": {
       "android": {
         "url": "https://github.com/mortenfyhn/minimed-pebble-bridge",
