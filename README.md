@@ -38,6 +38,10 @@ AppMessages from an Android package that isn't listed under `companionApp` in th
 `package.json`, so a new native sender has to be added there — open an issue or a PR. Senders that
 aren't native Android apps aren't affected.
 
+Already declared, so they work without a new release: `com.mortenfyhn.minimedpebble`
+(minimed-pebble-bridge) and `com.eveningoutpost.dexdrip` (xDrip+ — pre-declared in case someone
+implements the protocol there, which is where this watchface's protocol started).
+
 The reference sender is
 [minimed-pebble-bridge](https://github.com/mortenfyhn/minimed-pebble-bridge), which reads a
 Medtronic MiniMed 780G directly over Bluetooth, fully offline.

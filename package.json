@@ -13,12 +13,13 @@
     "watchapp": {
       "watchface": true
     },
-    "_companionAppNote": "Not just metadata: the Core app won't route AppMessages from an Android package that isn't listed here (minimed-pebble-bridge docs/FINDINGS.md). Any native Android sender must be added.",
+    "_companionAppNote": "Not just metadata: the Core app won't route AppMessages from an Android package that isn't listed here (minimed-pebble-bridge docs/FINDINGS.md). Any native Android sender must be added, which needs a new watchface release — so known senders are pre-declared even when no implementation exists yet.",
     "companionApp": {
       "android": {
         "url": "https://github.com/mortenfyhn/minimed-pebble-bridge",
         "apps": [
-          { "package": "com.mortenfyhn.minimedpebble" }
+          { "package": "com.mortenfyhn.minimedpebble" },
+          { "package": "com.eveningoutpost.dexdrip" }
         ]
       }
     },
