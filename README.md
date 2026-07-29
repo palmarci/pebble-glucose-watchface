@@ -42,6 +42,10 @@ Already declared, so they work without a new release: `com.mortenfyhn.minimedpeb
 (minimed-pebble-bridge) and `com.eveningoutpost.dexdrip` (xDrip+ — pre-declared in case someone
 implements the protocol there, which is where this watchface's protocol started).
 
+A side effect of that declaration: on install the Pebble app says *"Glucose needs a companion app to
+function properly"*. Read it as "this watchface needs **a** sender", not as a demand for one specific
+app — if your data already reaches the watch, you can ignore it.
+
 The reference sender is
 [minimed-pebble-bridge](https://github.com/mortenfyhn/minimed-pebble-bridge), which reads a
 Medtronic MiniMed 780G directly over Bluetooth, fully offline.
