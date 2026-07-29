@@ -95,7 +95,7 @@ Watchface:
 
 ## Reference implementations
 
-- **Watchface:** `minimed-pebble-watchface` (this repo; keys in `src/c/protocol.h`). Implements a subset:
+- **Watchface:** `pebble-glucose-watchface` (this repo; keys in `src/c/protocol.h`). Implements a subset:
   BG + timestamp, IOB, status, graph. Not delta, trend arrow, or phone battery.
 - **Sender:** the MiniMed→Pebble bridge `minimed-pebble-bridge` (keys in `Protocol.kt`). Sends BG,
   timestamp, IOB, status, graph.
