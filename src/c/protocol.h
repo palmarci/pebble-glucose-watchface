@@ -2,7 +2,8 @@
 //
 // Raw integer AppMessage keys, shared verbatim with the sender (the Android bridge). This watchface
 // implements a SUBSET of the protocol (BG + timestamp, IOB, status, graph); the full reference —
-// including delta, trend arrow, and phone battery — is in docs/PEBBLE_GLUCOSE_PROTOCOL.md.
+// including delta, trend arrow, and sender battery — is at
+// https://github.com/mortenfyhn/pebble-glucose-protocol.
 
 #pragma once
 

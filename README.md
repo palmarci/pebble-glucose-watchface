@@ -4,9 +4,9 @@ Shows your current blood glucose, a two-hour graph with an extrapolated trend pr
 board, and a status line — plus the time and date.
 
 The watchface is **source-agnostic**: it displays whatever a sender pushes to it over the
-[Pebble Glucose Protocol](docs/PEBBLE_GLUCOSE_PROTOCOL.md), and doesn't know or care whether the
-numbers came from a pump, a CGM, Nightscout or a file. It's also the protocol's reference
-implementation.
+[Pebble Glucose Protocol](https://github.com/mortenfyhn/pebble-glucose-protocol), and doesn't know or
+care whether the numbers came from a pump, a CGM, Nightscout or a file. It's also the protocol's
+reference implementation.
 
 ## What it displays
 
@@ -28,7 +28,7 @@ glucose-and-time watchface with an empty graph. Nothing needs disabling.
 
 ## Using it with your own data source
 
-Write a sender that speaks [the protocol](docs/PEBBLE_GLUCOSE_PROTOCOL.md) and targets this
+Write a sender that speaks [the protocol](https://github.com/mortenfyhn/pebble-glucose-protocol) and targets this
 watchface's UUID, `567a3f6e-97d0-4f3a-b63f-916a8213d284`. The watchface announces which fields it
 wants on launch and on every Bluetooth reconnect; the sender replies with those fields, and pushes
 again whenever it has new data.
