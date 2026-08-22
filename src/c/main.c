@@ -251,24 +251,30 @@ static void draw_axes(GContext *ctx, GRect bounds) {
     }
 }
 
+// Draw BG graph.
 static void draw_trace(GContext *ctx, GRect bounds) {
     if (s_graph_count == 0) {
         return;
     }
+
     // Time-axis width; the layer spans the full screen so edge points aren't clipped.
     const int16_t w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
     const uint32_t now = time(NULL);
     const int graph_minutes = GRAPH_WINDOW_HOURS * 60;
 
-    // BG history as a connected 2px line, newest on the right, oldest on the left. Consecutive readings
-    // are joined unless a sensor gap wider than GRAPH_GAP_THRESHOLD_MINUTES separates them, which draws as
-    // a break rather than a long straight segment bridging the missing data. Every point's x/y is computed
-    // (even ones older than the visible window); off-screen endpoints just let the graphics library clip
-    // the segment, so the trace enters cleanly from the left edge.
+    // BG history as a connected 2px line, newest on the right, oldest on the left.
+    // Consecutive readings are joined unless a sensor gap wider than GRAPH_GAP_THRESHOLD_MINUTES separates them, which
+    // draws as a break rather than a long straight segment bridging the missing data.
+
+    // Every point's x/y is computed (even ones older than the visible window); off-screen endpoints just let the
+    // graphics library clip the segment, so the trace enters cleanly from the left edge.
+
     graphics_context_set_stroke_color(ctx, GColorBlack);
     graphics_context_set_stroke_width(ctx, 2);
+
     bool have_prev = false;
     int prev_x = 0, prev_y = 0, prev_off = 0;
+
     for (int i = 0; i < s_graph_count; i++) {
         const uint32_t pt_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[i] * 60;
         const int mins_ago = (int)(((int64_t)now - (int64_t)pt_ts) / 60);
@@ -278,6 +284,7 @@ static void draw_trace(GContext *ctx, GRect bounds) {
         const bool join_prev = have_prev && (int)s_graph_offsets[i] - prev_off <= GRAPH_GAP_THRESHOLD_MINUTES;
         const bool join_next = i + 1 < s_graph_count &&
                                (int)s_graph_offsets[i + 1] - (int)s_graph_offsets[i] <= GRAPH_GAP_THRESHOLD_MINUTES;
+
         if (join_prev) {
             graphics_draw_line(ctx, GPoint(prev_x, prev_y), GPoint(x, y));
         } else if (!join_next) {
@@ -286,6 +293,7 @@ static void draw_trace(GContext *ctx, GRect bounds) {
             graphics_context_set_fill_color(ctx, GColorBlack);
             graphics_fill_circle(ctx, GPoint(x, y), 2);
         }
+
         have_prev = true;
         prev_x = x;
         prev_y = y;

@@ -38,6 +38,11 @@ KEY_GRAPH_LOW_LINE = 19
 # that's what the watch displays and what a reading looks like to a human.
 MGDL_PER_MMOL = 18.018
 
+# Must match GRAPH_GAP_THRESHOLD_MINUTES in main.c: points further apart than this draw as a break
+# rather than a connected segment. One minute past it is the narrowest gap that still breaks.
+GAP_THRESHOLD_MINUTES = 15
+MIN_GAP = GAP_THRESHOLD_MINUTES + 1
+
 
 def mmol_to_wire(mmol):
     """mmol/L -> the protocol's mg/dL / 2 byte. Out-of-byte values clamp; the watch clamps again
@@ -75,6 +80,23 @@ def ramp(start_mmol, end_mmol, minutes=120, step=5):
     ]
 
 
+def curve(keyframes, ts, window=120):
+    """Sample a smooth curve through (t, mmol) keyframes at the times `ts`, where t counts minutes
+    forward from the oldest point. Returns [(minutes_ago, mmol)].
+
+    Smoothstep between keyframes rather than straight lines: a BG trace has no corners, and the
+    eased ends make a keyframe-to-keyframe run read as a plateau instead of a ramp.
+    """
+    out = []
+    for t in ts:
+        for (t0, v0), (t1, v1) in zip(keyframes, keyframes[1:]):
+            if t0 <= t <= t1:
+                u = 0.0 if t1 == t0 else (t - t0) / (t1 - t0)
+                out.append((window - t, v0 + (v1 - v0) * u * u * (3 - 2 * u)))
+                break
+    return out
+
+
 def drop_between(points, oldest_age, newest_age):
     """Remove points whose age is inside [newest_age, oldest_age] — punches a sensor gap."""
     return [(age, v) for age, v in points if not (newest_age <= age <= oldest_age)]
@@ -82,7 +104,26 @@ def drop_between(points, oldest_age, newest_age):
 
 # Each preset returns (points, overrides). Points are [(minutes_ago, mmol)] in any order; they get
 # sorted oldest-first before packing.
+DEFAULT_PRESET = "everything"
+
 PRESETS = {
+    "everything": (
+        "the default: flat around 5, a drop to 2.8, then a rise to 16.0 at the top of the band — "
+        "plus a status line and the narrowest possible gaps around a lone point in the flat "
+        "stretch, so one send covers the trace, both target lines, the gap break, isolated-point "
+        "rendering, the status overlay and the projection",
+        # The lone point sits in the flat stretch, bracketed by the narrowest gaps that still
+        # break, so the break is as easy to get wrong as it can be. That puts its two neighbours
+        # off the 5-min grid, at exactly MIN_GAP either side. The drop and the rise keep their full
+        # sampling, so they still draw as complete curves.
+        lambda: (
+            curve(
+                [(0, 5.0), (50, 5.2), (75, 2.8), (120, 16.0)],
+                [0, 5, 25 - MIN_GAP, 25, 25 + MIN_GAP] + list(range(45, 121, 5)),
+            ),
+            {"status": "SUSPENDED"},
+        ),
+    ),
     "flat": (
         "steady 7.0 for 2 h — baseline trace and a flat projection",
         lambda: (ramp(7.0, 7.0), {}),
@@ -229,7 +270,8 @@ def main():
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    p.add_argument("preset", nargs="?", help="scenario to send; see --list")
+    p.add_argument("preset", nargs="?", default=DEFAULT_PRESET,
+                   help="scenario to send (default: %s); see --list" % DEFAULT_PRESET)
     p.add_argument("-l", "--list", action="store_true", help="list presets and exit")
     p.add_argument("--phone", action="store_true",
                    help="send to the real watch via the adb tunnel (127.0.0.1) instead of the emulator")
@@ -242,11 +284,11 @@ def main():
     p.add_argument("-v", "--verbose", action="store_true", help="print the pebble command")
     args = p.parse_args()
 
-    if args.list or not args.preset:
+    if args.list:
         width = max(len(n) for n in PRESETS)
         for name in PRESETS:
             print("  %-*s  %s" % (width, name, PRESETS[name][0]))
-        return 0 if args.list else 2
+        return 0
 
     if args.preset not in PRESETS:
         print("unknown preset %r; --list to see them all" % args.preset, file=sys.stderr)
