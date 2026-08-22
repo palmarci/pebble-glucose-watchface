@@ -9,7 +9,6 @@
 #include <math.h> // sqrtf (projection direction)
 #include "protocol.h"
 #include "strings.h"
-#include "test_mode.h"
 
 // Show "---" instead of a stale value once the last reading is this old. CGM cadence is 5 min, so
 // keep the last value on screen across a couple of missed readings before giving up on it.
@@ -609,27 +608,8 @@ static void window_unload(Window *window) {
     layer_destroy(s_graph_layer);
 }
 
-static void init_test_mode_data(void) {
-#ifdef TEST_MODE
-    STRCPY(s_bg_string, TEST_BG_STRING);
-    s_bg_timestamp = time(NULL) - TEST_MINUTES_AGO * 60;
-    STRCPY(s_iob_string, TEST_IOB_STRING);
-    STRCPY(s_status_string, TEST_STATUS_STRING);
-    // Dummy 3-hour graph: a triangle wave ~70..190 mg/dL (crosses the 4.0 & 10.0 target lines).
-    s_graph_ref_timestamp = time(NULL) - (uint32_t)3 * 3600;
-    s_graph_count = 36; // 3 h @ 5 min
-    for (int i = 0; i < 36; i++) {
-        s_graph_offsets[i] = i * 5;
-        int swing = (i % 12) < 6 ? (i % 12) * 10 : (12 - (i % 12)) * 10; // 0..60..0
-        s_graph_bg_values[i] = (90 + swing) / 2; // ~90..150 mg/dL, in-range
-    }
-#endif
-}
-
 static void init(void) {
-#ifndef TEST_MODE
     load_state(); // restore last reading + graph so a relaunch renders immediately, not empty
-#endif
     app_message_register_inbox_received(new_data_callback);
     app_message_register_inbox_dropped(inbox_dropped_callback);
     app_message_open(2048, 64); // inbox large enough for the graph byte array (up to 24 h of points)
@@ -655,7 +635,6 @@ static void deinit(void) {
 }
 
 int main(void) {
-    init_test_mode_data();
     init();
     app_event_loop();
     deinit();

@@ -6,3 +6,6 @@ node_modules/
 .lock-waf*
 # Local clangd config (absolute SDK paths, machine-specific — see CLAUDE.md "Gotchas")
 compile_flags.txt
+
+# stray bytecode from importing tools/mock_sender.py directly
+__pycache__/
