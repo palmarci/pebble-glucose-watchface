@@ -6,9 +6,10 @@
 // (issue #1) and drawn as a dotted line continuing the graph line from its latest point.
 
 #include <pebble.h>
-#include <math.h> // sqrtf (projection direction)
+
 #include "protocol.h"
 #include "strings.h"
+#include <math.h> // sqrtf (projection direction)
 
 // Show "---" instead of a stale value once the last reading is this old. CGM cadence is 5 min, so
 // keep the last value on screen across a couple of missed readings before giving up on it.
@@ -21,10 +22,11 @@
 
 // Graph config. We ask the phone for (and buffer) up to GRAPH_MAX_HOURS of history, but the visible
 // window is fixed to GRAPH_WINDOW_HOURS (below); the extra buffered history is kept for future use.
-#define GRAPH_MAX_HOURS 24    // history requested from / buffered for the phone; announced as our capability
-#define MAX_GRAPH_POINTS 300  // 24 h @ 5 min = 288, + headroom
-#define PERSIST_MAX_POINTS 128 // persist_write_data caps at 256 B/key (uint16 offsets -> 128 points);
-                               // a larger graph isn't persisted — the phone's ready-ping resend refills it
+#define GRAPH_MAX_HOURS 24   // history requested from / buffered for the phone; announced as our capability
+#define MAX_GRAPH_POINTS 300 // 24 h @ 5 min = 288, + headroom
+// persist_write_data caps at 256 B/key (uint16 offsets -> 128 points); a larger graph isn't
+// persisted — the phone's ready-ping resend refills it.
+#define PERSIST_MAX_POINTS 128
 // Fixed y-axis 2.2–16 mmol/L, in "mg/dL / 2" wire units (40..288 mg/dL). Out-of-range clamps to edge.
 #define GRAPH_VALUE_MIN 20
 #define GRAPH_VALUE_MAX 144
@@ -93,7 +95,7 @@ static TextLayer *s_date_layer;
 static Layer *s_graph_layer; // axes, trace and projection all draw here
 
 // Latest reading from the phone.
-static char s_bg_string[16] = ""; // whatever the phone last sent; "" until the first reading arrives
+static char s_bg_string[16] = "";   // whatever the phone last sent; "" until the first reading arrives
 static uint32_t s_bg_timestamp = 0; // 0 => never received
 
 static char s_iob_string[8] = "";     // raw IOB units from phone, e.g. "2.5"; empty = unknown
@@ -123,15 +125,12 @@ static void safe_strncpy(char *dst, const char *src, size_t dst_size) {
 // pointer rather than an array, which is the case sizeof would silently get wrong: the negative array
 // size below is only well-formed when the two types differ. __typeof__ rather than typeof because the
 // SDK compiles with -std=c99, where the unprefixed spelling isn't a keyword.
-#define STRCPY(dst, src)                                                                           \
-    ((dst)[0] = (dst)[0],                                                                          \
-     (void)sizeof(char[1 - 2 * __builtin_types_compatible_p(__typeof__(dst),                       \
-                                                            __typeof__(&(dst)[0]))]),              \
+#define STRCPY(dst, src)                                                                                               \
+    ((dst)[0] = (dst)[0],                                                                                              \
+     (void)sizeof(char[1 - 2 * __builtin_types_compatible_p(__typeof__(dst), __typeof__(&(dst)[0]))]),                 \
      safe_strncpy(dst, src, sizeof(dst)))
 
-static bool has_reading(void) {
-    return s_bg_timestamp != 0;
-}
+static bool has_reading(void) { return s_bg_timestamp != 0; }
 
 // Minutes since the current reading, or -1 if we've never received one. A reading dated in the future
 // (clock skew) reads as 0.
@@ -145,9 +144,7 @@ static int minutes_ago(void) {
 
 // True once the current reading is too old to trust (no fresh push for STALE_MINUTES). During a pump
 // outage no message arrives to clear the display, so this is re-evaluated from the minute tick.
-static bool is_stale(void) {
-    return has_reading() && minutes_ago() >= STALE_MINUTES;
-}
+static bool is_stale(void) { return has_reading() && minutes_ago() >= STALE_MINUTES; }
 
 static void update_bg_display(void) {
     // Stale -> blank the number rather than showing a value that hasn't updated in a while (a stale BG
@@ -156,7 +153,8 @@ static void update_bg_display(void) {
     // pump has no sensor value), so the watch never invents it -- every "---" mirrors the pump.
     // Guard the layer: a data message can arrive before window_load creates it (the on-watch sender
     // injects with zero latency, unlike a phone's), and text_layer_set_text(NULL,..) hard-faults.
-    if (s_bg_layer) text_layer_set_text(s_bg_layer, is_stale() ? "" : s_bg_string);
+    if (s_bg_layer)
+        text_layer_set_text(s_bg_layer, is_stale() ? "" : s_bg_string);
 }
 
 static void update_ago_display(void) {
@@ -170,7 +168,8 @@ static void update_ago_display(void) {
     } else {
         snprintf(s_ago_display, sizeof(s_ago_display), STR_AGO_HOURS_FMT, mins / 60);
     }
-    if (s_ago_layer) text_layer_set_text(s_ago_layer, s_ago_display);
+    if (s_ago_layer)
+        text_layer_set_text(s_ago_layer, s_ago_display);
 }
 
 static void update_iob_display(void) {
@@ -181,26 +180,29 @@ static void update_iob_display(void) {
     } else {
         snprintf(s_iob_display, sizeof(s_iob_display), STR_IOB_FMT, s_iob_string);
     }
-    if (s_iob_layer) text_layer_set_text(s_iob_layer, s_iob_display);
+    if (s_iob_layer)
+        text_layer_set_text(s_iob_layer, s_iob_display);
 }
 
 static void update_time_and_date(void) {
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
-    strftime(s_time_display, sizeof(s_time_display),
-             clock_is_24h_style() ? STR_TIME_24H_FMT : STR_TIME_12H_FMT, t);
+    strftime(s_time_display, sizeof(s_time_display), clock_is_24h_style() ? STR_TIME_24H_FMT : STR_TIME_12H_FMT, t);
     strftime(s_date_display, sizeof(s_date_display), STR_DATE_FMT, t);
     // Guarded for the same reason as the BG/ago/IOB layers: the tick is subscribed before
     // window_load creates the layers, so a tick landing in the launch gap would hit
     // text_layer_set_text(NULL,..) and hard-fault. window_load re-renders, so nothing is lost.
-    if (s_time_layer) text_layer_set_text(s_time_layer, s_time_display);
-    if (s_date_layer) text_layer_set_text(s_date_layer, s_date_display);
+    if (s_time_layer)
+        text_layer_set_text(s_time_layer, s_time_display);
+    if (s_date_layer)
+        text_layer_set_text(s_date_layer, s_date_display);
 }
 
 // The status label overlays the bottom of the graph as an opaque strip, but only when a status is
 // active; otherwise it's hidden so the full graph shows.
 static void update_status_display(void) {
-    if (s_status_layer) layer_mark_dirty(s_status_layer);
+    if (s_status_layer)
+        layer_mark_dirty(s_status_layer);
 }
 
 // Paints only the band + text (when a status is active); everything else stays transparent so the
@@ -213,18 +215,18 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
     graphics_context_set_fill_color(ctx, GColorWhite);
     graphics_fill_rect(ctx, GRect(0, STATUS_BAND_OFFSET_Y, w, STATUS_BAND_H), 0, GCornerNone);
     graphics_context_set_text_color(ctx, GColorBlack);
-    graphics_draw_text(ctx, s_status_string, fonts_get_system_font(STATUS_FONT),
-                       GRect(0, 0, w, STATUS_H), GTextOverflowModeTrailingEllipsis,
-                       GTextAlignmentCenter, NULL);
+    graphics_draw_text(ctx, s_status_string, fonts_get_system_font(STATUS_FONT), GRect(0, 0, w, STATUS_H),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
 // Map a BG value (mg/dL / 2) to a y inside the graph layer, clamping to the fixed range. The only place
 // that knows where the value band sits within the layer, so axes, trace and projection cannot disagree.
 static int graph_y(int bg) {
-    if (bg < GRAPH_VALUE_MIN) bg = GRAPH_VALUE_MIN;
-    if (bg > GRAPH_VALUE_MAX) bg = GRAPH_VALUE_MAX;
-    return GRAPH_PAD_TOP + GRAPH_BAND_H -
-           ((bg - GRAPH_VALUE_MIN) * GRAPH_BAND_H) / (GRAPH_VALUE_MAX - GRAPH_VALUE_MIN);
+    if (bg < GRAPH_VALUE_MIN)
+        bg = GRAPH_VALUE_MIN;
+    if (bg > GRAPH_VALUE_MAX)
+        bg = GRAPH_VALUE_MAX;
+    return GRAPH_PAD_TOP + GRAPH_BAND_H - ((bg - GRAPH_VALUE_MIN) * GRAPH_BAND_H) / (GRAPH_VALUE_MAX - GRAPH_VALUE_MIN);
 }
 
 // The static axes — target lines and hour ticks — drawn independent of the BG data, so an empty graph
@@ -273,11 +275,9 @@ static void draw_trace(GContext *ctx, GRect bounds) {
         const int x = w - (mins_ago * w) / graph_minutes;
         const int y = graph_y(s_graph_bg_values[i]);
         // Offsets ascend, so both gaps are simple subtractions.
-        const bool join_prev =
-            have_prev && (int)s_graph_offsets[i] - prev_off <= GRAPH_GAP_THRESHOLD_MINUTES;
-        const bool join_next =
-            i + 1 < s_graph_count &&
-            (int)s_graph_offsets[i + 1] - (int)s_graph_offsets[i] <= GRAPH_GAP_THRESHOLD_MINUTES;
+        const bool join_prev = have_prev && (int)s_graph_offsets[i] - prev_off <= GRAPH_GAP_THRESHOLD_MINUTES;
+        const bool join_next = i + 1 < s_graph_count &&
+                               (int)s_graph_offsets[i + 1] - (int)s_graph_offsets[i] <= GRAPH_GAP_THRESHOLD_MINUTES;
         if (join_prev) {
             graphics_draw_line(ctx, GPoint(prev_x, prev_y), GPoint(x, y));
         } else if (!join_next) {
@@ -299,9 +299,11 @@ static void draw_trace(GContext *ctx, GRect bounds) {
 // or a sensor gap separates them. Points are oldest->newest by index, so the newest reading is last.
 static bool trend_slope(float *slope) {
     const int n = s_graph_count;
-    if (n < 2) return false;
+    if (n < 2)
+        return false;
     const int dt = (int)s_graph_offsets[n - 1] - (int)s_graph_offsets[n - 2];
-    if (dt <= 0 || dt > TREND_MAX_GAP_MINUTES) return false;
+    if (dt <= 0 || dt > TREND_MAX_GAP_MINUTES)
+        return false;
     *slope = (float)((int)s_graph_bg_values[n - 1] - (int)s_graph_bg_values[n - 2]) / (float)dt;
     return true;
 }
@@ -311,12 +313,13 @@ static bool trend_slope(float *slope) {
 // a rising slope points up). This makes the line tangent to how the trace would continue from the latest
 // point, at the same scale as the graph. It starts TREND_PROJ_GAP past the pivot so there's a clear break
 // between the data (solid trace) and the extrapolation (dotted line).
-static void trend_draw_projection(GContext *ctx, GRect bounds, GPoint pivot, float slope,
-                                  float px_per_min, float px_per_wire) {
+static void trend_draw_projection(GContext *ctx, GRect bounds, GPoint pivot, float slope, float px_per_min,
+                                  float px_per_wire) {
     const float vx = px_per_min;
     const float vy = -slope * px_per_wire;
     const float mag = sqrtf(vx * vx + vy * vy);
-    if (mag < 1e-6f) return;
+    if (mag < 1e-6f)
+        return;
     const float ux = vx / mag, uy = vy / mag; // unit vector along the projection
 
     // Clamp the length so the whole dotted line stays inside the layer. A steep projection from a reading
@@ -325,19 +328,24 @@ static void trend_draw_projection(GContext *ctx, GRect bounds, GPoint pivot, flo
     float end = TREND_PROJ_GAP + TREND_PROJ_LEN;
     if (ux > 1e-6f) {
         const float d = (bounds.size.w - 1 - pivot.x) / ux;
-        if (d < end) end = d;
+        if (d < end)
+            end = d;
     } else if (ux < -1e-6f) {
         const float d = (1 - pivot.x) / ux;
-        if (d < end) end = d;
+        if (d < end)
+            end = d;
     }
     if (uy > 1e-6f) {
         const float d = (bounds.size.h - 1 - pivot.y) / uy;
-        if (d < end) end = d;
+        if (d < end)
+            end = d;
     } else if (uy < -1e-6f) {
         const float d = (1 - pivot.y) / uy;
-        if (d < end) end = d;
+        if (d < end)
+            end = d;
     }
-    if (end <= TREND_PROJ_GAP) return; // too cramped for even a dot
+    if (end <= TREND_PROJ_GAP)
+        return; // too cramped for even a dot
 
     // Dots along the line (Pebble has no native dashed line): TREND_DOT_COUNT small filled squares,
     // each matching the trace's thickness, spread evenly from the start gap to the clamped end.
@@ -359,14 +367,16 @@ static void draw_projection(GContext *ctx, GRect bounds) {
     // weren't worth their extra machinery at the 5-min sensor cadence. If a fancier estimator tempts you,
     // that's the history: it was tried and this won.
     float slope;
-    if (!trend_slope(&slope)) return;
+    if (!trend_slope(&slope))
+        return;
 
     // Don't extrapolate from stale data — no projection rather than a misleading one. (The BG number keeps
     // showing the last value once stale; the projection doesn't, since extrapolating from old points misleads.)
     const uint32_t now = time(NULL);
     const uint32_t newest_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[s_graph_count - 1] * 60;
     const int age_min = (int)(((int64_t)now - (int64_t)newest_ts) / 60);
-    if (age_min >= STALE_MINUTES) return;
+    if (age_min >= STALE_MINUTES)
+        return;
 
     // Anchor on the newest reading's ACTUAL position on the trace, so the projection is a true continuation
     // (collinear with the last segment) rather than a parallel-shifted copy — the point drifts left as it
@@ -399,7 +409,8 @@ static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     update_iob_display();
     // Redraw the graph too: point x-positions are computed from the current time, so without this the
     // trace freezes between the 5-min pushes (doesn't creep left, old points don't fall off the edge).
-    if (s_graph_layer) layer_mark_dirty(s_graph_layer); // trace scrolls and the projection goes stale together
+    if (s_graph_layer)
+        layer_mark_dirty(s_graph_layer); // trace scrolls and the projection goes stale together
 }
 
 // Persist the current reading + graph so relaunching the watchface (e.g. after the menu) shows it
@@ -424,16 +435,23 @@ static void save_state(void) {
 }
 
 static void load_state(void) {
-    if (persist_exists(PERSIST_BG_STRING)) persist_read_string(PERSIST_BG_STRING, s_bg_string, sizeof(s_bg_string));
-    if (persist_exists(PERSIST_BG_TIMESTAMP)) s_bg_timestamp = (uint32_t)persist_read_int(PERSIST_BG_TIMESTAMP);
-    if (persist_exists(PERSIST_IOB_STRING)) persist_read_string(PERSIST_IOB_STRING, s_iob_string, sizeof(s_iob_string));
-    if (persist_exists(PERSIST_STATUS_STRING)) persist_read_string(PERSIST_STATUS_STRING, s_status_string, sizeof(s_status_string));
-    if (persist_exists(PERSIST_GRAPH_HIGH)) s_graph_high_line = (uint8_t)persist_read_int(PERSIST_GRAPH_HIGH);
-    if (persist_exists(PERSIST_GRAPH_LOW)) s_graph_low_line = (uint8_t)persist_read_int(PERSIST_GRAPH_LOW);
+    if (persist_exists(PERSIST_BG_STRING))
+        persist_read_string(PERSIST_BG_STRING, s_bg_string, sizeof(s_bg_string));
+    if (persist_exists(PERSIST_BG_TIMESTAMP))
+        s_bg_timestamp = (uint32_t)persist_read_int(PERSIST_BG_TIMESTAMP);
+    if (persist_exists(PERSIST_IOB_STRING))
+        persist_read_string(PERSIST_IOB_STRING, s_iob_string, sizeof(s_iob_string));
+    if (persist_exists(PERSIST_STATUS_STRING))
+        persist_read_string(PERSIST_STATUS_STRING, s_status_string, sizeof(s_status_string));
+    if (persist_exists(PERSIST_GRAPH_HIGH))
+        s_graph_high_line = (uint8_t)persist_read_int(PERSIST_GRAPH_HIGH);
+    if (persist_exists(PERSIST_GRAPH_LOW))
+        s_graph_low_line = (uint8_t)persist_read_int(PERSIST_GRAPH_LOW);
     if (persist_exists(PERSIST_GRAPH_COUNT) && persist_exists(PERSIST_GRAPH_OFFSETS) &&
         persist_exists(PERSIST_GRAPH_VALUES)) {
         uint16_t count = (uint16_t)persist_read_int(PERSIST_GRAPH_COUNT);
-        if (count > MAX_GRAPH_POINTS) count = MAX_GRAPH_POINTS;
+        if (count > MAX_GRAPH_POINTS)
+            count = MAX_GRAPH_POINTS;
         if (count > 0) {
             persist_read_data(PERSIST_GRAPH_OFFSETS, s_graph_offsets, count * sizeof(uint16_t));
             persist_read_data(PERSIST_GRAPH_VALUES, s_graph_bg_values, count * sizeof(uint8_t));
@@ -452,7 +470,8 @@ static bool parse_graph_blob(const uint8_t *d, uint16_t len) {
         return false;
     }
     uint16_t count = d[4] | (d[5] << 8);
-    if (count > MAX_GRAPH_POINTS) count = MAX_GRAPH_POINTS;
+    if (count > MAX_GRAPH_POINTS)
+        count = MAX_GRAPH_POINTS;
     if (len < (uint16_t)(6 + count * 3)) {
         return false;
     }
@@ -494,17 +513,21 @@ static void new_data_callback(DictionaryIterator *iter, void *context) {
 
     Tuple *graph_tuple = dict_find(iter, KEY_GRAPH_DATA);
     if (graph_tuple && parse_graph_blob(graph_tuple->value->data, graph_tuple->length)) {
-        if (s_graph_layer) layer_mark_dirty(s_graph_layer); // new points -> retrace and recompute the trend
+        if (s_graph_layer)
+            layer_mark_dirty(s_graph_layer); // new points -> retrace and recompute the trend
     }
     Tuple *high_tuple = dict_find(iter, KEY_GRAPH_HIGH_LINE);
-    if (high_tuple) s_graph_high_line = high_tuple->value->uint8;
+    if (high_tuple)
+        s_graph_high_line = high_tuple->value->uint8;
     Tuple *low_tuple = dict_find(iter, KEY_GRAPH_LOW_LINE);
-    if (low_tuple) s_graph_low_line = low_tuple->value->uint8;
-    if ((high_tuple || low_tuple) && s_graph_layer) layer_mark_dirty(s_graph_layer);
+    if (low_tuple)
+        s_graph_low_line = low_tuple->value->uint8;
+    if ((high_tuple || low_tuple) && s_graph_layer)
+        layer_mark_dirty(s_graph_layer);
     // KEY_GRAPH_HOURS from the phone is ignored: the visible window is fixed to GRAPH_WINDOW_HOURS.
 
-    APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s (ts=%lu) IOB: %s graph=%d", s_bg_string,
-            s_bg_timestamp, s_iob_string, s_graph_count);
+    APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s (ts=%lu) IOB: %s graph=%d", s_bg_string, s_bg_timestamp, s_iob_string,
+            s_graph_count);
     update_bg_display();
     update_ago_display();
 }
@@ -535,8 +558,7 @@ static void bluetooth_callback(bool connected) {
     }
 }
 
-static TextLayer *make_label(Layer *root, GRect frame, const char *font_key,
-                             GTextAlignment align) {
+static TextLayer *make_label(Layer *root, GRect frame, const char *font_key, GTextAlignment align) {
     TextLayer *layer = text_layer_create(frame);
     text_layer_set_background_color(layer, GColorClear);
     text_layer_set_text_color(layer, GColorBlack);
@@ -564,32 +586,25 @@ static void window_load(Window *window) {
     // so edge points and the projection aren't clipped; each maps its own content into the left 2/3.
 
     // BG value — top, centered, large.
-    s_bg_layer = make_label(root, GRect(0, -6, b.size.w, 42),
-                            FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
+    s_bg_layer = make_label(root, GRect(0, -6, b.size.w, 42), FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
     // Time since last reading — top-left corner.
-    s_ago_layer = make_label(root, GRect(4, 4, 64, 26),
-                             FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentLeft);
+    s_ago_layer = make_label(root, GRect(4, 4, 64, 26), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentLeft);
     // Insulin on board — top-right corner (e.g. "2.5U").
-    s_iob_layer = make_label(root, GRect(b.size.w - 68, 4, 64, 26),
-                             FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentRight);
+    s_iob_layer = make_label(root, GRect(b.size.w - 68, 4, 64, 26), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentRight);
 
     // The graph — axes, trace and projection in one layer (see graph_layer_update_proc). Full screen
     // width so the newest point at the right edge of the 2 h area isn't clipped and the projection can
     // run into the remaining third; taller than the value band for projection headroom.
-    s_graph_layer =
-        make_layer(root, GRect(0, GRAPH_LAYER_TOP_Y, b.size.w, GRAPH_LAYER_H), graph_layer_update_proc);
+    s_graph_layer = make_layer(root, GRect(0, GRAPH_LAYER_TOP_Y, b.size.w, GRAPH_LAYER_H), graph_layer_update_proc);
 
     // Pump status — a full-width band + text painted low over the graph (see status_layer_update_proc).
     // Added after the graph so it draws on top; the time (added next) still draws over its bottom edge.
-    s_status_layer =
-        make_layer(root, GRect(0, STATUS_TOP_Y, b.size.w, STATUS_H), status_layer_update_proc);
+    s_status_layer = make_layer(root, GRect(0, STATUS_TOP_Y, b.size.w, STATUS_H), status_layer_update_proc);
 
     // Current time — bottom, same large font as BG.
-    s_time_layer = make_label(root, GRect(0, 105, b.size.w, 42),
-                              FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
+    s_time_layer = make_label(root, GRect(0, 105, b.size.w, 42), FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
     // Date — below the time.
-    s_date_layer = make_label(root, GRect(0, 140, b.size.w, 26),
-                              FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentCenter);
+    s_date_layer = make_label(root, GRect(0, 140, b.size.w, 26), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentCenter);
 
     update_bg_display();
     update_ago_display();
@@ -615,12 +630,10 @@ static void init(void) {
     app_message_open(2048, 64); // inbox large enough for the graph byte array (up to 24 h of points)
 
     tick_timer_service_subscribe(MINUTE_UNIT, tick_callback);
-    connection_service_subscribe(
-        (ConnectionHandlers){.pebble_app_connection_handler = bluetooth_callback});
+    connection_service_subscribe((ConnectionHandlers){.pebble_app_connection_handler = bluetooth_callback});
 
     s_window = window_create();
-    window_set_window_handlers(s_window,
-                               (WindowHandlers){.load = window_load, .unload = window_unload});
+    window_set_window_handlers(s_window, (WindowHandlers){.load = window_load, .unload = window_unload});
     window_stack_push(s_window, true);
 
     send_ready();

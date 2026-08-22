@@ -15,4 +15,4 @@
 #define STR_AGO_HOURS_FMT "%dh" // age of the current BG value, >= 1 hour
 #define STR_TIME_24H_FMT "%H:%M"
 #define STR_TIME_12H_FMT "%I:%M"
-#define STR_DATE_FMT "%a %d %b"      // e.g. "Sun 12 Jul"
+#define STR_DATE_FMT "%a %d %b" // e.g. "Sun 12 Jul"
