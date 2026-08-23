@@ -1,4 +1,4 @@
-# _Morten's Glucose_
+# Morten's Glucose Watchface
 
 This is my blood glucose watchface. It looks like this:
 
