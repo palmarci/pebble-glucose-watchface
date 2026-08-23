@@ -9,7 +9,6 @@
 
 #include "protocol.h"
 #include "strings.h"
-#include <math.h> // sqrtf (projection direction)
 
 // Show "---" instead of a stale value once the last reading is this old. CGM cadence is 5 min, so
 // keep the last value on screen across a couple of missed readings before giving up on it.
@@ -311,6 +310,19 @@ static bool trend_slope(float *slope) {
     return true;
 }
 
+// newlib's sqrtf is unusable here: its literal pool holds absolute pointers into .text, and the
+// Pebble app loader only relocates .rel.data and .got entries, so those pointers keep their
+// link-time values. Reading them hard-faults on aplite/basalt/chalk/diorite (it happens to land on
+// mapped memory on flint/emery/gabbro). Newton on a float needs no constant table.
+static float sqrtf_local(float x) {
+    if (x <= 0.0f)
+        return 0.0f;
+    float r = x > 1.0f ? x : 1.0f;
+    for (int i = 0; i < 20; i++)
+        r = 0.5f * (r + x / r);
+    return r;
+}
+
 // The projection: a dotted line running from the latest point at the graph's own visual slope. Direction:
 // over one minute the trace moves px_per_min right and slope*px_per_wire in y (screen y grows downward, so
 // a rising slope points up). This makes the line tangent to how the trace would continue from the latest
@@ -320,7 +332,7 @@ static void trend_draw_projection(GContext *ctx, GRect bounds, GPoint pivot, flo
                                   float px_per_wire) {
     const float vx = px_per_min;
     const float vy = -slope * px_per_wire;
-    const float mag = sqrtf(vx * vx + vy * vy);
+    const float mag = sqrtf_local(vx * vx + vy * vy);
     if (mag < 1e-6f)
         return;
     const float ux = vx / mag, uy = vy / mag; // unit vector along the projection
