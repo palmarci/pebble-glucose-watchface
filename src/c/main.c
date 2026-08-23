@@ -285,7 +285,8 @@ static void draw_bg_graph(GContext *ctx, GRect bounds) {
             graphics_draw_line(ctx, GPoint(prev_x, prev_y), GPoint(x, y));
         } else if (!join_next) {
             // Gap on both sides: Draw an isolated dot
-            graphics_fill_circle(ctx, GPoint(x, y), 2);
+            graphics_fill_rect(ctx, GRect(x - STROKE_OFFSET, y - STROKE_OFFSET, STROKE_WIDTH, STROKE_WIDTH), 0,
+                               GCornerNone);
         }
 
         have_prev = true;
