@@ -25,6 +25,31 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 PACKAGE_JSON = os.path.join(HERE, os.pardir, "package.json")
 
+# Display sizes come from the SDK's own platform table rather than a copy kept here: it lists every
+# platform with its PBL_DISPLAY_WIDTH/HEIGHT, so a new one (gabbro was the last) needs no edit.
+SDK_TOOLS = os.path.expanduser("~/.pebble-sdk/SDKs/current/sdk-core/pebble/common/tools")
+
+
+def sdk_platforms():
+    """{platform: (width, height)} from pebble_sdk_platform.py."""
+    sys.path.insert(0, SDK_TOOLS)
+    try:
+        import pebble_sdk_platform
+    except ImportError:
+        sys.exit("can't read the SDK platform table at %s — is the Pebble SDK installed?" % SDK_TOOLS)
+    finally:
+        sys.path.pop(0)
+    out = {}
+    for name, platform in pebble_sdk_platform.pebble_platforms.items():
+        sizes = dict(d.split("=") for d in platform["DEFINES"] if "=" in d)
+        out[name] = (int(sizes["PBL_DISPLAY_WIDTH"]), int(sizes["PBL_DISPLAY_HEIGHT"]))
+    return out
+
+
+def screen_width(platform):
+    return sdk_platforms()[platform][0]
+
+
 # Protocol keys (keep in sync with src/c/protocol.h).
 KEY_BG_TIMESTAMP = 10
 KEY_BG_STRING = 11
@@ -98,7 +123,6 @@ def curve(keyframes, ts, window=120):
 
 
 # Geometry mirrored from main.c, needed to build a rise that is 45 degrees *on screen*.
-SCREEN_WIDTH = {"flint": 144, "aplite": 144, "basalt": 144, "diorite": 144, "chalk": 180, "emery": 200}
 GRAPH_WIDTH_NUM, GRAPH_WIDTH_DEN = 2, 3
 GRAPH_WINDOW_MINUTES = 120
 GRAPH_BAND_H = 64
@@ -116,7 +140,7 @@ def wire_per_step_45(platform, step_min=5):
     degrees lands on the same pixels, (4,-4), (8,-8), (12,-12) from the pivot. Checked on both
     platforms; the rounded value is inside that window and the neighbours either side are not.
     """
-    graph_w = SCREEN_WIDTH[platform] * GRAPH_WIDTH_NUM // GRAPH_WIDTH_DEN
+    graph_w = screen_width(platform) * GRAPH_WIDTH_NUM // GRAPH_WIDTH_DEN
     px_per_min = graph_w / GRAPH_WINDOW_MINUTES
     px_per_wire = GRAPH_BAND_H / (GRAPH_VALUE_MAX - GRAPH_VALUE_MIN)
     return round(px_per_min / px_per_wire * step_min)
@@ -141,11 +165,11 @@ def drop_between(points, oldest_age, newest_age):
 
 # Each preset returns (points, overrides). Points are [(minutes_ago, mmol)] in any order; they get
 # sorted oldest-first before packing.
-DEFAULT_PRESET = "everything"
+DEFAULT_PRESET = "showcase"
 
 PRESETS = {
     "everything": (
-        "the default: dead flat at 5.0, a drop to 2.8, then a rise to 16.0 at the top of the band — "
+        "dead flat at 5.0, a drop to 2.8, then a rise to 16.0 at the top of the band — "
         "plus a status line and the narrowest possible gaps around a lone point in the flat "
         "stretch, so one send covers the trace, both target lines, the gap break, isolated-point "
         "rendering, the status overlay and the projection",
@@ -159,6 +183,22 @@ PRESETS = {
                 [0, 5, 25 - MIN_GAP, 25, 25 + MIN_GAP] + list(range(45, 121, 5)),
             ),
             {"status": "SUSPENDED"},
+        ),
+    ),
+    "showcase": (
+        "the default, a good-looking in-range day for screenshots: 5.4 up to 7.9, back down to a wandering 5.7-6.0 "
+        "stretch, then a rise over the last 15 min to 6.9 — whole trace between the target lines",
+        # For the README shot: nothing clipped, nothing stale, no status overlay, and enough shape
+        # that the trace, both target lines and the projection are all visible at once.
+        # The last keyframe sits past the end of the window (150 > 120) on purpose: smoothstep eases
+        # into a keyframe, so ending on one would flatten the newest segment and leave the
+        # projection almost horizontal. Cutting the sampling mid-rise keeps the slope steep.
+        lambda: (
+            curve(
+                [(0, 5.4), (30, 7.9), (60, 6.0), (75, 5.7), (90, 6.0), (105, 5.8), (135, 8.0)],
+                list(range(0, 121, 5)),
+            ),
+            {"iob": "1.4"},
         ),
     ),
     "flat": (
@@ -279,7 +319,6 @@ def build_message(points, bg=None, iob="2.5", status="", high=90, low=36, now=No
     return fields, pack_graph(ref_ts, wire_points)
 
 
-PLATFORMS = ("flint", "emery", "diorite", "chalk", "basalt", "aplite")
 DEFAULT_PLATFORM = "flint"
 
 
@@ -324,7 +363,7 @@ def main():
     p.add_argument("-l", "--list", action="store_true", help="list presets and exit")
     p.add_argument("--phone", action="store_true",
                    help="send to the real watch via the adb tunnel (127.0.0.1) instead of the emulator")
-    p.add_argument("--emulator", metavar="PLATFORM", default=DEFAULT_PLATFORM, choices=PLATFORMS,
+    p.add_argument("--emulator", metavar="PLATFORM", default=DEFAULT_PLATFORM, choices=sorted(sdk_platforms()),
                    help="emulator platform to target (default: %s); ignored with --phone"
                         % DEFAULT_PLATFORM)
     p.add_argument("--bg", help="override the BG string (default: newest graph point)")
