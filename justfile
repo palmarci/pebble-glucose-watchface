@@ -13,7 +13,7 @@ emu platform="flint":
 resize multiplier="2":
 	#!/usr/bin/env bash
 	# Find the window
-	window_id=$(xdotool search --name -- 'Pebble|QEMU' | tail -1)
+	window_id=$(xdotool search --name 'QEMU' | tail -1)
 	# Resize it
 	xdotool windowsize --sync $window_id $((144*{{multiplier}})) $((168*{{multiplier}}))
 	# Set it always on top
