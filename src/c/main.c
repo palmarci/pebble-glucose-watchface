@@ -140,6 +140,11 @@ static void safe_strncpy(char *dst, const char *src, size_t dst_size) {
 
 static bool has_reading(void) { return s_bg_timestamp != 0; }
 
+static void draw_layer_outline(GContext *ctx, GRect bounds) {
+    graphics_context_set_stroke_width(ctx, 1);
+    graphics_draw_rect(ctx, bounds);
+}
+
 // Minutes since the current reading, or -1 if we've never received one. A reading dated in the future
 // (clock skew) reads as 0.
 static int minutes_ago(void) {
@@ -225,6 +230,8 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
     graphics_context_set_text_color(ctx, GColorBlack);
     graphics_draw_text(ctx, s_status_string, fonts_get_system_font(STATUS_FONT), GRect(0, 0, w, STATUS_H),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+
+    // draw_layer_outline(ctx, layer_get_bounds(layer)); // For debugging
 }
 
 // Map a BG value (mg/dL / 2) to a y inside the graph layer, clamping to the fixed range. The only place
@@ -416,6 +423,8 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     draw_graph_axes(ctx, bounds);
     draw_bg_graph(ctx, bounds);
     draw_projection(ctx, bounds);
+
+    // draw_layer_outline(ctx, bounds);  // For debugging
 }
 
 static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
