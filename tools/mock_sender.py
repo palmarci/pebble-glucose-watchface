@@ -234,14 +234,18 @@ def build_message(points, bg=None, iob="2.5", status="", high=90, low=36, now=No
     return fields, pack_graph(ref_ts, wire_points)
 
 
-def pebble_target(use_phone):
-    return ["--phone", "127.0.0.1"] if use_phone else ["--emulator", "flint"]
+PLATFORMS = ("flint", "emery", "diorite", "chalk", "basalt", "aplite")
+DEFAULT_PLATFORM = "flint"
 
 
-def send(fields, blob, use_phone, verbose):
+def pebble_target(use_phone, platform):
+    return ["--phone", "127.0.0.1"] if use_phone else ["--emulator", platform]
+
+
+def send(fields, blob, use_phone, platform, verbose):
     """Shell out to `pebble send-app-message`. The blob goes via --bytes-file: a 24 h graph is
     ~900 bytes, well past a comfortable argv hex string."""
-    cmd = ["pebble", "send-app-message"] + pebble_target(use_phone)
+    cmd = ["pebble", "send-app-message"] + pebble_target(use_phone, platform)
     cmd += ["--app-uuid", app_uuid()]
 
     for kind in ("uint", "string"):
@@ -261,8 +265,8 @@ def send(fields, blob, use_phone, verbose):
         os.unlink(blob_path)
 
 
-def screenshot(path, use_phone):
-    cmd = ["pebble", "screenshot"] + pebble_target(use_phone) + ["--no-open", path]
+def screenshot(path, use_phone, platform):
+    cmd = ["pebble", "screenshot"] + pebble_target(use_phone, platform) + ["--no-open", path]
     return subprocess.call(cmd)
 
 
@@ -275,6 +279,9 @@ def main():
     p.add_argument("-l", "--list", action="store_true", help="list presets and exit")
     p.add_argument("--phone", action="store_true",
                    help="send to the real watch via the adb tunnel (127.0.0.1) instead of the emulator")
+    p.add_argument("--emulator", metavar="PLATFORM", default=DEFAULT_PLATFORM, choices=PLATFORMS,
+                   help="emulator platform to target (default: %s); ignored with --phone"
+                        % DEFAULT_PLATFORM)
     p.add_argument("--bg", help="override the BG string (default: newest graph point)")
     p.add_argument("--iob", help="override the IOB string")
     p.add_argument("--status", help="override the status string ('' shows the graph)")
@@ -305,11 +312,11 @@ def main():
     print("%s: %d points, %d-byte blob, BG %s" % (
         args.preset, len(points), len(blob), fields[KEY_BG_STRING][1]))
 
-    rc = send(fields, blob, args.phone, args.verbose)
+    rc = send(fields, blob, args.phone, args.emulator, args.verbose)
     if rc != 0:
         return rc
     if args.screenshot:
-        return screenshot(args.screenshot, args.phone)
+        return screenshot(args.screenshot, args.phone, args.emulator)
     return 0
 
 
