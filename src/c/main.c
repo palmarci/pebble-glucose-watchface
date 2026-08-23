@@ -50,6 +50,9 @@
 #define GRAPH_LAYER_TOP_Y (GRAPH_BAND_TOP_Y - GRAPH_PAD_TOP)
 #define GRAPH_LAYER_H (GRAPH_PAD_TOP + GRAPH_BAND_H + GRAPH_PAD_BOTTOM)
 
+#define STROKE_WIDTH 3 // Graph stroke width in pixels
+#define STROKE_OFFSET (STROKE_WIDTH / 2)
+
 // Trend projection (issue #1). Extrapolated on-watch from recent BG, NOT read from the pump. Its angle is
 // the graph's own visual slope (same px/min and px/value as the trace), so it lies tangent to how the
 // line would continue from the latest point — not an arbitrary rate->angle mapping. Drawn as a dotted line
@@ -58,7 +61,6 @@
 #define TREND_MAX_GAP_MINUTES 15 // ignore the last two points if a sensor gap wider than this separates them
 #define TREND_PROJ_LEN 12        // projection length start-to-end in px (clamped to stay inside the band)
 #define TREND_PROJ_GAP 6         // gap (px) between the trace's last point and the projection start
-#define TREND_DOT_SIZE 3         // dotted-line dot square side in px
 #define TREND_DOT_COUNT 3        // dots drawn along the projection, spread over its (clamped) length
 
 // Persistent-storage keys (survive watchface unload and watch reboot). Separate namespace from the
@@ -251,8 +253,9 @@ static void draw_axes(GContext *ctx, GRect bounds) {
     }
 }
 
-// Draw BG graph.
-static void draw_trace(GContext *ctx, GRect bounds) {
+// Draw blood glucose history graph. Data gaps wider than GRAPH_GAP_THRESHOLD_MINUTES
+// render as gaps.
+static void draw_bg_graph(GContext *ctx, GRect bounds) {
     if (s_graph_count == 0) {
         return;
     }
@@ -262,15 +265,8 @@ static void draw_trace(GContext *ctx, GRect bounds) {
     const uint32_t now = time(NULL);
     const int graph_minutes = GRAPH_WINDOW_HOURS * 60;
 
-    // BG history as a connected 2px line, newest on the right, oldest on the left.
-    // Consecutive readings are joined unless a sensor gap wider than GRAPH_GAP_THRESHOLD_MINUTES separates them, which
-    // draws as a break rather than a long straight segment bridging the missing data.
-
-    // Every point's x/y is computed (even ones older than the visible window); off-screen endpoints just let the
-    // graphics library clip the segment, so the trace enters cleanly from the left edge.
-
     graphics_context_set_stroke_color(ctx, GColorBlack);
-    graphics_context_set_stroke_width(ctx, 2);
+    graphics_context_set_stroke_width(ctx, STROKE_WIDTH);
 
     bool have_prev = false;
     int prev_x = 0, prev_y = 0, prev_off = 0;
@@ -288,9 +284,7 @@ static void draw_trace(GContext *ctx, GRect bounds) {
         if (join_prev) {
             graphics_draw_line(ctx, GPoint(prev_x, prev_y), GPoint(x, y));
         } else if (!join_next) {
-            // A gap on both sides: no segment will ever be drawn for this reading, so draw a dot or it
-            // vanishes entirely. Fill colour set explicitly — the loop above only sets stroke.
-            graphics_context_set_fill_color(ctx, GColorBlack);
+            // Gap on both sides: Draw an isolated dot
             graphics_fill_circle(ctx, GPoint(x, y), 2);
         }
 
@@ -358,13 +352,13 @@ static void trend_draw_projection(GContext *ctx, GRect bounds, GPoint pivot, flo
     // Dots along the line (Pebble has no native dashed line): TREND_DOT_COUNT small filled squares,
     // each matching the trace's thickness, spread evenly from the start gap to the clamped end.
     graphics_context_set_fill_color(ctx, GColorBlack);
-    const int dh = TREND_DOT_SIZE / 2;
     const float span = end - TREND_PROJ_GAP;
     for (int k = 0; k < TREND_DOT_COUNT; k++) {
         const float t = TREND_PROJ_GAP + span * k / (TREND_DOT_COUNT - 1);
         const int x = pivot.x + (int)(ux * t);
         const int y = pivot.y + (int)(uy * t);
-        graphics_fill_rect(ctx, GRect(x - dh, y - dh, TREND_DOT_SIZE, TREND_DOT_SIZE), 0, GCornerNone);
+        graphics_fill_rect(ctx, GRect(x - STROKE_OFFSET, y - STROKE_OFFSET, STROKE_WIDTH, STROKE_WIDTH), 0,
+                           GCornerNone);
     }
 }
 
@@ -388,7 +382,7 @@ static void draw_projection(GContext *ctx, GRect bounds) {
 
     // Anchor on the newest reading's ACTUAL position on the trace, so the projection is a true continuation
     // (collinear with the last segment) rather than a parallel-shifted copy — the point drifts left as it
-    // ages, and the projection follows. newest_x and graph_y() are exactly what draw_trace uses to plot
+    // ages, and the projection follows. newest_x and graph_y() are exactly what draw_bg_graph uses to plot
     // that point, so the pivot lands on it by construction. The graph's own px/min and px/value set the
     // angle; the time axis is the layer's left NUM/DEN and the projection runs into the rest.
     const int graph_w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
@@ -404,7 +398,7 @@ static void draw_projection(GContext *ctx, GRect bounds) {
 static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     const GRect bounds = layer_get_bounds(layer);
     draw_axes(ctx, bounds);
-    draw_trace(ctx, bounds);
+    draw_bg_graph(ctx, bounds);
     draw_projection(ctx, bounds);
 }
 
