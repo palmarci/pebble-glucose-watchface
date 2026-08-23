@@ -1,25 +1,28 @@
 {
   "name": "pebble-glucose-watchface",
-  "author": "Morten Fyhn Amundsen",
+  "author": "Morten F. Amundsen",
   "version": "0.1.0",
   "keywords": ["pebble-app"],
+  "private": true,
   "dependencies": {},
   "pebble": {
-    "displayName": "Glucose",
+    "displayName": "Morten's Glucose",
     "uuid": "567a3f6e-97d0-4f3a-b63f-916a8213d284",
     "sdkVersion": "3",
     "enableMultiJS": false,
-    "targetPlatforms": ["flint", "emery"],
+    "targetPlatforms": [
+      "flint",
+      "emery"
+    ],
     "watchapp": {
       "watchface": true
     },
-    "_companionAppNote": "Not just metadata: the Core app won't route AppMessages from an Android package that isn't listed here (minimed-pebble-bridge docs/FINDINGS.md). Any native Android sender must be added, which needs a new watchface release — so known senders are pre-declared even when no implementation exists yet.",
     "companionApp": {
       "android": {
-        "url": "https://github.com/mortenfyhn/minimed-pebble-bridge",
+        "url": "https://github.com/mortenfyhn/pebble-glucose-watchface",
         "apps": [
-          { "package": "com.mortenfyhn.minimedpebble" },
-          { "package": "com.eveningoutpost.dexdrip" }
+          { "package": "com.eveningoutpost.dexdrip" },
+          { "package": "com.mortenfyhn.minimedpebble" }
         ]
       }
     },
