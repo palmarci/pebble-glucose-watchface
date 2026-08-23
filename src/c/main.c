@@ -225,8 +225,7 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
         return;
     }
     const int16_t w = layer_get_bounds(layer).size.w;
-    graphics_context_set_fill_color(ctx, GColorWhite);
-    graphics_fill_rect(ctx, GRect(0, STATUS_BAND_OFFSET_Y, w, STATUS_BAND_H), 0, GCornerNone);
+
     graphics_context_set_text_color(ctx, GColorBlack);
     graphics_draw_text(ctx, s_status_string, fonts_get_system_font(STATUS_FONT), GRect(0, 0, w, STATUS_H),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
@@ -605,7 +604,7 @@ static Layer *make_layer(Layer *root, GRect frame, LayerUpdateProc update_proc) 
 static void window_load(Window *window) {
     window_set_background_color(window, GColorWhite);
     Layer *root = window_get_root_layer(window);
-    GRect b = layer_get_bounds(root); // flint: 144 x 168
+    GRect b = layer_get_bounds(root);
 
     // Layout: BG (top) and time (bottom) share the same large font; time-ago top-left, IOB top-right;
     // the middle band's left 2/3 is the 2 h graph (status label overlaid on its bottom strip) and its
@@ -622,6 +621,7 @@ static void window_load(Window *window) {
     // The graph — axes, trace and projection in one layer (see graph_layer_update_proc). Full screen
     // width so the newest point at the right edge of the 2 h area isn't clipped and the projection can
     // run into the remaining third; taller than the value band for projection headroom.
+
     s_graph_layer = make_layer(root, GRect(0, GRAPH_LAYER_TOP_Y, b.size.w, GRAPH_LAYER_H), graph_layer_update_proc);
 
     // Pump status — a full-width band + text painted low over the graph (see status_layer_update_proc).
