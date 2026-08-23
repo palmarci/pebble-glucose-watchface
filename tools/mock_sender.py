@@ -97,6 +97,43 @@ def curve(keyframes, ts, window=120):
     return out
 
 
+# Geometry mirrored from main.c, needed to build a rise that is 45 degrees *on screen*.
+SCREEN_WIDTH = {"flint": 144, "aplite": 144, "basalt": 144, "diorite": 144, "chalk": 180, "emery": 200}
+GRAPH_WIDTH_NUM, GRAPH_WIDTH_DEN = 2, 3
+GRAPH_WINDOW_MINUTES = 120
+GRAPH_BAND_H = 64
+GRAPH_VALUE_MIN, GRAPH_VALUE_MAX = 20, 144
+
+
+def wire_per_step_45(platform, step_min=5):
+    """Wire units per sample for a 45-degree on-screen rise.
+
+    The graph spans GRAPH_WIDTH_NUM/DEN of the screen across GRAPH_WINDOW_MINUTES, so px/min scales
+    with screen width, while px/wire is a fixed GRAPH_BAND_H over the value range. 45 degrees needs
+    px/min == px/wire * slope, and the answer is never a whole number of wire units: flint wants
+    7.75 per 5 min, emery 10.74. Rounding is still exact in the end, because
+    trend_draw_projection truncates its dot offsets to int — every slope from roughly 43 to 46
+    degrees lands on the same pixels, (4,-4), (8,-8), (12,-12) from the pivot. Checked on both
+    platforms; the rounded value is inside that window and the neighbours either side are not.
+    """
+    graph_w = SCREEN_WIDTH[platform] * GRAPH_WIDTH_NUM // GRAPH_WIDTH_DEN
+    px_per_min = graph_w / GRAPH_WINDOW_MINUTES
+    px_per_wire = GRAPH_BAND_H / (GRAPH_VALUE_MAX - GRAPH_VALUE_MIN)
+    return round(px_per_min / px_per_wire * step_min)
+
+
+def diagonal_45(end_wire, platform, step_min=5):
+    """A straight 45-degree rise ending `end_wire` at the newest point, oldest first.
+
+    Runs down to the bottom of the value range, so the number of points follows from the step size
+    and differs per platform. Values are given in wire units and round-tripped through
+    wire_to_mmol, so no mmol rounding creeps in.
+    """
+    per_step = wire_per_step_45(platform, step_min)
+    steps = (end_wire - GRAPH_VALUE_MIN) // per_step + 1
+    return [(step_min * i, wire_to_mmol(end_wire - per_step * i)) for i in range(steps - 1, -1, -1)]
+
+
 def drop_between(points, oldest_age, newest_age):
     """Remove points whose age is inside [newest_age, oldest_age] — punches a sensor gap."""
     return [(age, v) for age, v in points if not (newest_age <= age <= oldest_age)]
@@ -108,7 +145,7 @@ DEFAULT_PRESET = "everything"
 
 PRESETS = {
     "everything": (
-        "the default: flat around 5, a drop to 2.8, then a rise to 16.0 at the top of the band — "
+        "the default: dead flat at 5.0, a drop to 2.8, then a rise to 16.0 at the top of the band — "
         "plus a status line and the narrowest possible gaps around a lone point in the flat "
         "stretch, so one send covers the trace, both target lines, the gap break, isolated-point "
         "rendering, the status overlay and the projection",
@@ -118,7 +155,7 @@ PRESETS = {
         # sampling, so they still draw as complete curves.
         lambda: (
             curve(
-                [(0, 5.0), (50, 5.2), (75, 2.8), (120, 16.0)],
+                [(0, 5.0), (50, 5.0), (75, 2.8), (120, 16.0)],
                 [0, 5, 25 - MIN_GAP, 25, 25 + MIN_GAP] + list(range(45, 121, 5)),
             ),
             {"status": "SUSPENDED"},
@@ -131,6 +168,14 @@ PRESETS = {
     "rise": (
         "5.0 -> 11.0 over 2 h — projection angled up",
         lambda: (ramp(5.0, 11.0), {}),
+    ),
+    "rise-45": (
+        "a pixel-exact 45-degree rise over the last hour, ending at 12.9 with headroom — for "
+        "checking the projection dots land at (4,-4), (8,-8), (12,-12) from the pivot",
+        # Ends at wire 116 rather than the top of the band so trend_draw_projection's length clamp
+        # doesn't shorten the dotted line; a clamped projection can't be checked against fixed
+        # offsets.
+        lambda platform: (diagonal_45(116, platform), {}),
     ),
     "fall": (
         "11.0 -> 4.0 over 2 h — projection angled down",
@@ -301,7 +346,9 @@ def main():
         print("unknown preset %r; --list to see them all" % args.preset, file=sys.stderr)
         return 2
 
-    points, overrides = PRESETS[args.preset][1]()
+    build = PRESETS[args.preset][1]
+    # Only the platform-dependent presets take an argument; the rest stay zero-arg.
+    points, overrides = build(args.emulator) if build.__code__.co_argcount else build()
     kwargs = dict(overrides)
     for name in ("bg", "iob", "status", "high", "low"):
         value = getattr(args, name)
