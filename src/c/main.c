@@ -10,6 +10,15 @@
 #include "protocol.h"
 #include "strings.h"
 
+// --- Constants ---
+
+#define GRAPH_HOURS 2 // Hours of graph data
+
+#define STROKE_WIDTH 3 // Graph stroke width in pixels
+#define STROKE_OFFSET (STROKE_WIDTH / 2)
+
+// --- Messy stuff, to be cleaned up ---
+
 // Show "---" instead of a stale value once the last reading is this old. CGM cadence is 5 min, so
 // keep the last value on screen across a couple of missed readings before giving up on it.
 // MUST match the bridge's STALE_SECONDS (minimed-pebble-bridge BridgeForegroundService) so the watch
@@ -20,7 +29,7 @@
 #define FRESH_MINUTES 6
 
 // Graph config. We ask the phone for (and buffer) up to GRAPH_MAX_HOURS of history, but the visible
-// window is fixed to GRAPH_WINDOW_HOURS (below); the extra buffered history is kept for future use.
+// window is fixed to GRAPH_HOURS (below); the extra buffered history is kept for future use.
 #define GRAPH_MAX_HOURS 24   // history requested from / buffered for the phone; announced as our capability
 #define MAX_GRAPH_POINTS 300 // 24 h @ 5 min = 288, + headroom
 // persist_write_data caps at 256 B/key (uint16 offsets -> 128 points); a larger graph isn't
@@ -31,9 +40,10 @@
 #define GRAPH_VALUE_MAX 144
 // Don't connect points more than this far apart (a sensor gap draws as a break, not a straight line).
 #define GRAPH_GAP_THRESHOLD_MINUTES 15
+
 // Issue #1: the graph area is fixed to the last 2 h (regardless of the phone's KEY_GRAPH_HOURS) and
 // occupies the left 2/3 of the screen; the right 1/3 shows the extrapolated trend projection (see below).
-#define GRAPH_WINDOW_HOURS 2
+
 #define GRAPH_WIDTH_NUM 2 // graph width = screen width * NUM/DEN; the rest is the projection region
 #define GRAPH_WIDTH_DEN 3
 // The value band: BG values map into these GRAPH_BAND_H pixels, starting at this screen y.
@@ -48,9 +58,6 @@
 // and the projection pivot cannot drift off the trace. It sits behind the time/BG text, which stay on top.
 #define GRAPH_LAYER_TOP_Y (GRAPH_BAND_TOP_Y - GRAPH_PAD_TOP)
 #define GRAPH_LAYER_H (GRAPH_PAD_TOP + GRAPH_BAND_H + GRAPH_PAD_BOTTOM)
-
-#define STROKE_WIDTH 3 // Graph stroke width in pixels
-#define STROKE_OFFSET (STROKE_WIDTH / 2)
 
 // Trend projection (issue #1). Extrapolated on-watch from recent BG, NOT read from the pump. Its angle is
 // the graph's own visual slope (same px/min and px/value as the trace), so it lies tangent to how the
@@ -230,39 +237,34 @@ static int graph_y(int bg) {
     return GRAPH_PAD_TOP + GRAPH_BAND_H - ((bg - GRAPH_VALUE_MIN) * GRAPH_BAND_H) / (GRAPH_VALUE_MAX - GRAPH_VALUE_MIN);
 }
 
-// The static axes — target lines and hour ticks — drawn independent of the BG data, so an empty graph
-// still shows "axes waiting for data". Full layer width: the target lines are pure value thresholds with
-// no x-meaning, so they span everything. The hour ticks belong to the time axis, which only exists over
-// the graph region (left 2/3) — the right 1/3 is projection space, not past time — so ticks stop there.
-static void draw_axes(GContext *ctx, GRect bounds) {
-    const int w = bounds.size.w;
+static void draw_graph_axes(GContext *ctx, GRect bounds) {
+    const int width = bounds.size.w;
+    const int hi_y = graph_y(s_graph_high_line);
+    const int lo_y = graph_y(s_graph_low_line);
 
-    graphics_context_set_fill_color(ctx, GColorBlack);
-    const int high_y = graph_y(s_graph_high_line);
-    const int low_y = graph_y(s_graph_low_line);
-    graphics_fill_rect(ctx, GRect(0, high_y, w, 1), 0, GCornerNone);
-    graphics_fill_rect(ctx, GRect(0, low_y, w, 1), 0, GCornerNone);
+    // Draw high and low lines
+    graphics_draw_line(ctx, GPoint(0, hi_y), GPoint(width, hi_y));
+    graphics_draw_line(ctx, GPoint(0, lo_y), GPoint(width, lo_y));
 
-    // Two ticks crossing the target lines, at 1/3 and 2/3 of the width from the left, both 5px tall.
-    const int tick_half = 2; // 5px total (2*2+1)
-    for (int n = 1; n <= 2; n++) {
-        const int tx = w * n / 3;
-        graphics_fill_rect(ctx, GRect(tx, high_y - tick_half, 1, tick_half * 2 + 1), 0, GCornerNone);
-        graphics_fill_rect(ctx, GRect(tx, low_y - tick_half, 1, tick_half * 2 + 1), 0, GCornerNone);
+    // Draw hourly tick marks
+    const int tick_length = 5; // Pixel length
+    const int half_tick = tick_length / 2;
+    for (int n = 1; n <= GRAPH_HOURS; n++) {
+        const int x = width * n / 3;
+        graphics_draw_line(ctx, GPoint(x, hi_y - half_tick), GPoint(x, hi_y + half_tick));
+        graphics_draw_line(ctx, GPoint(x, lo_y - half_tick), GPoint(x, lo_y + half_tick));
     }
 }
 
-// Draw blood glucose history graph. Data gaps wider than GRAPH_GAP_THRESHOLD_MINUTES
-// render as gaps.
 static void draw_bg_graph(GContext *ctx, GRect bounds) {
     if (s_graph_count == 0) {
         return;
     }
 
     // Time-axis width; the layer spans the full screen so edge points aren't clipped.
-    const int16_t w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
+    const int16_t w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN; // todo something better here
     const uint32_t now = time(NULL);
-    const int graph_minutes = GRAPH_WINDOW_HOURS * 60;
+    const int graph_minutes = GRAPH_HOURS * 60;
 
     graphics_context_set_stroke_color(ctx, GColorBlack);
     graphics_context_set_stroke_width(ctx, STROKE_WIDTH);
@@ -280,6 +282,7 @@ static void draw_bg_graph(GContext *ctx, GRect bounds) {
         const bool join_next = i + 1 < s_graph_count &&
                                (int)s_graph_offsets[i + 1] - (int)s_graph_offsets[i] <= GRAPH_GAP_THRESHOLD_MINUTES;
 
+        // Data gaps wider than GRAPH_GAP_THRESHOLD_MINUTES render as gaps.
         if (join_prev) {
             graphics_draw_line(ctx, GPoint(prev_x, prev_y), GPoint(x, y));
         } else if (!join_next) {
@@ -399,7 +402,7 @@ static void draw_projection(GContext *ctx, GRect bounds) {
     // that point, so the pivot lands on it by construction. The graph's own px/min and px/value set the
     // angle; the time axis is the layer's left NUM/DEN and the projection runs into the rest.
     const int graph_w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
-    const int graph_minutes = GRAPH_WINDOW_HOURS * 60;
+    const int graph_minutes = GRAPH_HOURS * 60;
     const int newest_x = graph_w - (age_min * graph_w) / graph_minutes;
     const float px_per_min = (float)graph_w / graph_minutes;
     const float px_per_wire = (float)GRAPH_BAND_H / (GRAPH_VALUE_MAX - GRAPH_VALUE_MIN);
@@ -410,7 +413,7 @@ static void draw_projection(GContext *ctx, GRect bounds) {
 // Axes behind the trace, projection on top of both.
 static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     const GRect bounds = layer_get_bounds(layer);
-    draw_axes(ctx, bounds);
+    draw_graph_axes(ctx, bounds);
     draw_bg_graph(ctx, bounds);
     draw_projection(ctx, bounds);
 }
@@ -539,7 +542,7 @@ static void new_data_callback(DictionaryIterator *iter, void *context) {
         s_graph_low_line = low_tuple->value->uint8;
     if ((high_tuple || low_tuple) && s_graph_layer)
         layer_mark_dirty(s_graph_layer);
-    // KEY_GRAPH_HOURS from the phone is ignored: the visible window is fixed to GRAPH_WINDOW_HOURS.
+    // KEY_GRAPH_HOURS from the phone is ignored: the visible window is fixed to GRAPH_HOURS.
 
     APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s (ts=%lu) IOB: %s graph=%d", s_bg_string, s_bg_timestamp, s_iob_string,
             s_graph_count);
