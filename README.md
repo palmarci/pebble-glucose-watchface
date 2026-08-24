@@ -1,5 +1,7 @@
 # Morten's Glucose Watchface
 
+[Get it on Pebble Appstore](https://apps.repebble.com/b785c22984c843299e95bba0)
+
 This is my blood glucose watchface. It looks like this:
 
 <img width="144" height="168" alt="Image" src="https://github.com/user-attachments/assets/ed52c276-f736-465b-a529-b09f5383ff79" />
