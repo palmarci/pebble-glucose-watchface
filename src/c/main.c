@@ -8,14 +8,20 @@
 #include <pebble.h>
 
 #include "protocol.h"
-#include "strings.h"
 
 // --- Constants ---
 
-#define GRAPH_HOURS 2 // Hours of graph data
-
+// Graph config
+#define GRAPH_HOURS 2  // Hours of graph data
 #define STROKE_WIDTH 3 // Graph stroke width in pixels
 #define STROKE_OFFSET (STROKE_WIDTH / 2)
+
+// String formatting
+#define STR_IOB_FMT "%sU"       // insulin on board, e.g. "2.5U"
+#define STR_AGO_MIN_FMT "%dm"   // age of the current BG value, in minutes, e.g. "5m"
+#define STR_AGO_HOURS_FMT "%dh" // age of the current BG value, >= 1 hour
+#define STR_TIME_24H_FMT "%H:%M"
+#define STR_TIME_12H_FMT "%I:%M"
 
 // --- Messy stuff, to be cleaned up ---
 
@@ -101,6 +107,24 @@ static Layer *s_status_layer;
 static TextLayer *s_time_layer;
 static TextLayer *s_date_layer;
 static Layer *s_graph_layer; // axes, trace and projection all draw here
+static Layer *s_debug_layer; // draws the debug outlines below, nothing else
+
+// Debug outlines: flip a row to true to draw that layer's box while working on the layout. The
+// layers are taken by address because they don't exist until window_load. s_graph_layer and
+// s_status_layer are custom layers and outline themselves, in their own update procs.
+static const struct {
+    TextLayer **layer;
+    bool show;
+} s_debug_boxes[] = {
+    // clang-format off
+    {&s_bg_layer,   false},
+    {&s_ago_layer,  false},
+    {&s_iob_layer,  false},
+    // Todo add graph layer
+    {&s_time_layer, false},
+    {&s_date_layer, false},
+    // clang-format on
+};
 
 // Latest reading from the phone.
 static char s_bg_string[16] = "";   // whatever the phone last sent; "" until the first reading arrives
@@ -140,9 +164,32 @@ static void safe_strncpy(char *dst, const char *src, size_t dst_size) {
 
 static bool has_reading(void) { return s_bg_timestamp != 0; }
 
+#define DEBUG_OUTLINE_STEP 2 // pixels between dots
+
 static void draw_layer_outline(GContext *ctx, GRect bounds) {
-    graphics_context_set_stroke_width(ctx, 1);
-    graphics_draw_rect(ctx, bounds);
+    const int16_t left = bounds.origin.x, top = bounds.origin.y;
+    const int16_t right = left + bounds.size.w - 1, bottom = top + bounds.size.h - 1;
+    for (int16_t x = left; x <= right; x += DEBUG_OUTLINE_STEP) {
+        graphics_draw_pixel(ctx, GPoint(x, top));
+        graphics_draw_pixel(ctx, GPoint(x, bottom));
+    }
+    for (int16_t y = top; y <= bottom; y += DEBUG_OUTLINE_STEP) {
+        graphics_draw_pixel(ctx, GPoint(left, y));
+        graphics_draw_pixel(ctx, GPoint(right, y));
+    }
+}
+
+// A TextLayer owns its update proc, so its box has to be drawn from somewhere else: this layer sits
+// over the whole window, on top of everything, and outlines the frames switched on in s_debug_boxes.
+// Frames are parent-relative and this layer spans the root, so they need no translation.
+static void debug_layer_update_proc(Layer *layer, GContext *ctx) {
+    graphics_context_set_stroke_color(ctx, GColorBlack);
+    for (unsigned i = 0; i < ARRAY_LENGTH(s_debug_boxes); i++) {
+        if (!s_debug_boxes[i].show) {
+            continue;
+        }
+        draw_layer_outline(ctx, layer_get_frame(text_layer_get_layer(*s_debug_boxes[i].layer)));
+    }
 }
 
 // Minutes since the current reading, or -1 if we've never received one. A reading dated in the future
@@ -201,7 +248,7 @@ static void update_time_and_date(void) {
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
     strftime(s_time_display, sizeof(s_time_display), clock_is_24h_style() ? STR_TIME_24H_FMT : STR_TIME_12H_FMT, t);
-    strftime(s_date_display, sizeof(s_date_display), STR_DATE_FMT, t);
+    strftime(s_date_display, sizeof(s_date_display), "%a %d", t);
     // Guarded for the same reason as the BG/ago/IOB layers: the tick is subscribed before
     // window_load creates the layers, so a tick landing in the launch gap would hit
     // text_layer_set_text(NULL,..) and hard-fault. window_load re-renders, so nothing is lost.
@@ -230,7 +277,7 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
     graphics_draw_text(ctx, s_status_string, fonts_get_system_font(STATUS_FONT), GRect(0, 0, w, STATUS_H),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 
-    // draw_layer_outline(ctx, layer_get_bounds(layer)); // For debugging
+    // draw_layer_outline(ctx, layer_get_bounds(layer)); // Debug
 }
 
 // Map a BG value (mg/dL / 2) to a y inside the graph layer, clamping to the fixed range. The only place
@@ -423,7 +470,7 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     draw_bg_graph(ctx, bounds);
     draw_projection(ctx, bounds);
 
-    // draw_layer_outline(ctx, bounds);  // For debugging
+    // draw_layer_outline(ctx, bounds); // Debug
 }
 
 static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
@@ -584,7 +631,7 @@ static void bluetooth_callback(bool connected) {
     }
 }
 
-static TextLayer *make_label(Layer *root, GRect frame, const char *font_key, GTextAlignment align) {
+static TextLayer *make_text_layer(Layer *root, GRect frame, const char *font_key, GTextAlignment align) {
     TextLayer *layer = text_layer_create(frame);
     text_layer_set_background_color(layer, GColorClear);
     text_layer_set_text_color(layer, GColorBlack);
@@ -601,37 +648,84 @@ static Layer *make_layer(Layer *root, GRect frame, LayerUpdateProc update_proc) 
     return layer;
 }
 
+// todo:
+// * [x] BG layer
+// * [.] time ago layer
+// * [.] iob layer
+// * [ ] graph layer
+// * [ ] status layer
+// * [x] time layer
+// * [x] date layer
 static void window_load(Window *window) {
     window_set_background_color(window, GColorWhite);
     Layer *root = window_get_root_layer(window);
     GRect b = layer_get_bounds(root);
 
-    // Layout: BG (top) and time (bottom) share the same large font; time-ago top-left, IOB top-right;
-    // the middle band's left 2/3 is the 2 h graph (status label overlaid on its bottom strip) and its
-    // right 1/3 is the trend projection (issue #1). The graph/axis/trend layers are all full screen width
-    // so edge points and the projection aren't clipped; each maps its own content into the left 2/3.
+    const int edge_margin = 4; // Edge margin in pixels
+    const int internal_margin = 2;
+    const int h_24 = 24;                    // Gothic 24 min layer height
+    const int h_24_cap = 14;                // Gothic 24 cap height
+    const int h_24_space = h_24 - h_24_cap; // Gothic 24 free space
+    const int h_42 = 42;                    // Bitham 42 min layer height
+    const int h_42_cap = 29;                // Bitham 42 cap height ("0" extends to 30px)
+    const int h_42_space = h_42 - h_42_cap; // Bitham 42 free space
 
-    // BG value — top, centered, large.
-    s_bg_layer = make_label(root, GRect(0, -6, b.size.w, 42), FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
-    // Time since last reading — top-left corner.
-    s_ago_layer = make_label(root, GRect(4, 4, 64, 26), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentLeft);
-    // Insulin on board — top-right corner (e.g. "2.5U").
-    s_iob_layer = make_label(root, GRect(b.size.w - 68, 4, 64, 26), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentRight);
+    // BG value - top center
+    {
+        const int margin = PBL_IF_RECT_ELSE(1, 3) * edge_margin; // Big margin on round
+        const int y = -h_42_space + margin;
+        const int h = h_42;
+        s_bg_layer = make_text_layer(root, GRect(0, y, b.size.w, h), FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
+    }
 
-    // The graph — axes, trace and projection in one layer (see graph_layer_update_proc). Full screen
-    // width so the newest point at the right edge of the 2 h area isn't clipped and the projection can
-    // run into the remaining third; taller than the value band for projection headroom.
+    // Time ago - top left
+    {
+        const int w = 48;
+        const int h = h_24;
+        const int x = PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_WIDTH / 10);
+        const int y = PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_HEIGHT / 6);
+        s_ago_layer = make_text_layer(root, GRect(x, y, w, h), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentLeft);
+    }
 
-    s_graph_layer = make_layer(root, GRect(0, GRAPH_LAYER_TOP_Y, b.size.w, GRAPH_LAYER_H), graph_layer_update_proc);
+    // Insulin on board - top right
+    {
+        const int w = 48;
+        const int h = h_24;
+        const int x = PBL_DISPLAY_WIDTH - w - PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_WIDTH / 10);
+        const int y = PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_HEIGHT / 6);
+        s_iob_layer = make_text_layer(root, GRect(x, y, w, h), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentRight);
+    }
 
-    // Pump status — a full-width band + text painted low over the graph (see status_layer_update_proc).
-    // Added after the graph so it draws on top; the time (added next) still draws over its bottom edge.
+    // Graph - centered vertically
+    {
+        const int y = (PBL_DISPLAY_HEIGHT - GRAPH_LAYER_H) / 2;
+        s_graph_layer = make_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, GRAPH_LAYER_H), graph_layer_update_proc);
+    }
+
+    // Pump status - centered below graph
     s_status_layer = make_layer(root, GRect(0, STATUS_TOP_Y, b.size.w, STATUS_H), status_layer_update_proc);
 
-    // Current time — bottom, same large font as BG.
-    s_time_layer = make_label(root, GRect(0, 105, b.size.w, 42), FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
-    // Date — below the time.
-    s_date_layer = make_label(root, GRect(0, 140, b.size.w, 26), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentCenter);
+    // Current date - centered near bottom
+    const int date_edge_margin = PBL_IF_RECT_ELSE(1, 2) * edge_margin;
+    const int date_y = PBL_DISPLAY_HEIGHT - h_24 - date_edge_margin;
+    {
+        const int h = h_24;
+        const int y = date_y;
+        s_date_layer =
+            make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentCenter);
+    }
+
+    // Current time - centered above date
+    {
+        const int h = h_42;
+        // Half margin above the date layer's text (not the layer itself)
+        const int y = date_y - h_42 + (h_24 - h_24_cap) - internal_margin;
+        s_time_layer =
+            make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
+    }
+
+    // Last, so the outlines draw over every other layer.
+    s_debug_layer = make_layer(root, b, debug_layer_update_proc);
 
     update_bg_display();
     update_ago_display();
@@ -648,6 +742,7 @@ static void window_unload(Window *window) {
     text_layer_destroy(s_time_layer);
     text_layer_destroy(s_date_layer);
     layer_destroy(s_graph_layer);
+    layer_destroy(s_debug_layer);
 }
 
 static void init(void) {
