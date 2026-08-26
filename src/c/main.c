@@ -637,25 +637,39 @@ static Layer *make_layer(Layer *root, GRect frame, LayerUpdateProc update_proc) 
     return layer;
 }
 
+// Pixels from layer top to font cap height.
+int cap_offset(const char *font_key) {
+    static const struct {
+        const char *key;
+        int offset;
+    } table[] = {
+        {FONT_KEY_BITHAM_42_BOLD, 13},
+        {FONT_KEY_GOTHIC_24_BOLD, 10},
+        {FONT_KEY_GOTHIC_18_BOLD, 7},
+    };
+
+    for (unsigned i = 0; i < ARRAY_LENGTH(table); i++) {
+        if (strcmp(font_key, table[i].key) == 0)
+            return table[i].offset;
+    }
+
+    APP_LOG(APP_LOG_LEVEL_ERROR, "Unknown font key: %s", font_key);
+    return 0;
+}
+
 static void window_load(Window *window) {
     window_set_background_color(window, GColorWhite);
     Layer *root = window_get_root_layer(window);
     GRect b = layer_get_bounds(root);
 
-    const int edge_margin = 6; // Edge margin in pixels
+    const int edge_margin = 6;
     const int internal_margin = 2;
-    const int h_24 = 24;                    // Gothic 24 min layer height
-    const int h_24_cap = 14;                // Gothic 24 cap height
-    const int h_24_space = h_24 - h_24_cap; // Gothic 24 free space
-    const int h_42 = 42;                    // Bitham 42 min layer height
-    const int h_42_cap = 29;                // Bitham 42 cap height ("0" extends to 30px)
-    const int h_42_space = h_42 - h_42_cap; // Bitham 42 free space
 
     // BG value - top center
     {
         const int margin = PBL_IF_RECT_ELSE(1, 2) * edge_margin; // Big margin on round
-        const int y = -h_42_space + margin;
-        const int h = h_42;
+        const int y = margin - cap_offset(FONT_KEY_BITHAM_42_BOLD);
+        const int h = 42;
         s_bg_layer =
             make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
 
@@ -665,7 +679,7 @@ static void window_load(Window *window) {
     // Time ago - top left
     {
         const int w = 48;
-        const int h = h_24;
+        const int h = 24;
         const int x = PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_WIDTH / 10);
         const int y = PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_HEIGHT / 6);
         s_ago_layer = make_text_layer(root, GRect(x, y, w, h), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentLeft);
@@ -676,7 +690,7 @@ static void window_load(Window *window) {
     // Insulin on board - top right
     {
         const int w = 48;
-        const int h = h_24;
+        const int h = 24;
         const int x = PBL_DISPLAY_WIDTH - w - PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_WIDTH / 10);
         const int y = PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_HEIGHT / 6);
         s_iob_layer = make_text_layer(root, GRect(x, y, w, h), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentRight);
@@ -690,14 +704,14 @@ static void window_load(Window *window) {
         const int y = y_graph;
         s_graph_layer = make_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, GRAPH_LAYER_H), graph_layer_update_proc);
 
-        // debug_box(GRect(0, y, PBL_DISPLAY_WIDTH, GRAPH_LAYER_H)); // Debug
+        // debug_box(GRect(0, y, PBL_DISPLAY_WIDTH, GRAPH_LAYER_H)); // Debug (entire layer)
         // debug_box(GRect(0, y + GRAPH_PAD_TOP, PBL_DISPLAY_WIDTH, GRAPH_BAND_H)); // Debug (data band only)
     }
 
     // Pump status - centered below graph
     {
         const int y = y_graph + GRAPH_LAYER_H - STATUS_H;
-        const int h = STATUS_H;
+        const int h = STATUS_H; // Todo tighten and unify
         s_status_layer = make_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), status_layer_update_proc);
 
         // debug_box(GRect(0, STATUS_TOP_Y, b.size.w, STATUS_H)); // Debug
@@ -705,9 +719,9 @@ static void window_load(Window *window) {
 
     // Current date - centered near bottom
     const int date_edge_margin = PBL_IF_RECT_ELSE(1, 2) * edge_margin;
-    const int date_y = PBL_DISPLAY_HEIGHT - h_24 - date_edge_margin;
+    const int date_y = PBL_DISPLAY_HEIGHT - date_edge_margin - 24;
     {
-        const int h = h_24;
+        const int h = 24;
         const int y = date_y;
         s_date_layer =
             make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentCenter);
@@ -717,9 +731,8 @@ static void window_load(Window *window) {
 
     // Current time - centered above date
     {
-        const int h = h_42;
-        // Half margin above the date layer's text (not the layer itself)
-        const int y = date_y - h_42 + (h_24 - h_24_cap) - internal_margin;
+        const int h = 42;
+        const int y = date_y + cap_offset(FONT_KEY_GOTHIC_24_BOLD) - internal_margin - h;
         s_time_layer =
             make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
 
