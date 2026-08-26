@@ -16,10 +16,6 @@ It has:
 
 Forks and PRs welcome.
 
-## Target platforms
-
-Mainly built for `flint` (Pebble 2 Duo) but I intend to make it look good on all Pebbles.
-
 ## Companion app
 
 This watchface uses a generic [Pebble Glucose Protocol](https://github.com/mortenfyhn/pebble-glucose-protocol), so it can be made to work with any data source. You need a companion app to send glucose data to the watch, via the Pebble app. Each companion app must be added to [`package.json`](package.json).
