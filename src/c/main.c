@@ -642,7 +642,7 @@ static void window_load(Window *window) {
     Layer *root = window_get_root_layer(window);
     GRect b = layer_get_bounds(root);
 
-    const int edge_margin = 4; // Edge margin in pixels
+    const int edge_margin = 6; // Edge margin in pixels
     const int internal_margin = 2;
     const int h_24 = 24;                    // Gothic 24 min layer height
     const int h_24_cap = 14;                // Gothic 24 cap height
@@ -653,7 +653,7 @@ static void window_load(Window *window) {
 
     // BG value - top center
     {
-        const int margin = PBL_IF_RECT_ELSE(1, 3) * edge_margin; // Big margin on round
+        const int margin = PBL_IF_RECT_ELSE(1, 2) * edge_margin; // Big margin on round
         const int y = -h_42_space + margin;
         const int h = h_42;
         s_bg_layer =
