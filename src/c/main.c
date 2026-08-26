@@ -662,13 +662,12 @@ static void window_load(Window *window) {
     Layer *root = window_get_root_layer(window);
     GRect b = layer_get_bounds(root);
 
-    const int edge_margin = 6;
+    const int edge_margin = PBL_IF_RECT_ELSE(6, 12);
     const int internal_margin = 2;
 
     // BG value - top center
     {
-        const int margin = PBL_IF_RECT_ELSE(1, 2) * edge_margin; // Big margin on round
-        const int y = margin - cap_offset(FONT_KEY_BITHAM_42_BOLD);
+        const int y = edge_margin - cap_offset(FONT_KEY_BITHAM_42_BOLD);
         const int h = 42;
         s_bg_layer =
             make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
@@ -718,8 +717,7 @@ static void window_load(Window *window) {
     }
 
     // Current date - centered near bottom
-    const int date_edge_margin = PBL_IF_RECT_ELSE(1, 2) * edge_margin;
-    const int date_y = PBL_DISPLAY_HEIGHT - date_edge_margin - 24;
+    const int date_y = PBL_DISPLAY_HEIGHT - edge_margin - 24;
     {
         const int h = 24;
         const int y = date_y;
