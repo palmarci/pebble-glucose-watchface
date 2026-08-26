@@ -663,7 +663,7 @@ static void window_load(Window *window) {
     GRect b = layer_get_bounds(root);
 
     const int edge_margin = PBL_IF_RECT_ELSE(6, 12);
-    const int internal_margin = 2;
+    const int internal_margin = 3;
 
     // BG value - top center
     {
