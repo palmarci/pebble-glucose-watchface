@@ -1,0 +1,11 @@
+This is my blood glucose watchface. It can work with any glucose data source.
+
+COMPANION APP
+
+This watchface uses a generic Pebble Glucose Protocol, and can therefore be made to work with any data source (github.com/mortenfyhn/pebble-glucose-protocol). You need a companion app or other source that sends glucose data using the this protocol. Each companion app must be added to package.json.
+
+Options:
+• MiniMed Pebble Bridge - an experimental MiniMed pump companion app (github.com/mortenfyhn/minimed-pebble-bridge)
+• xDrip - hopefully one day
+• Direct MiniMed pump connection - this is what I use (github.com/mortenfyhn/PebbleOS)
+• Make your own app implementing the same protocol (github.com/mortenfyhn/pebble-glucose-protocol)
