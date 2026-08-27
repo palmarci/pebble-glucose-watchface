@@ -4,7 +4,7 @@
 
 This is my blood glucose watchface. It looks like this:
 
-<img width="822" height="402" alt="Image" src="https://github.com/user-attachments/assets/4fe3f03a-25f9-4095-9803-990e25f91f4f" />
+<img width="720" height="320" alt="Image" src="https://github.com/user-attachments/assets/096b87a2-90ee-45ba-b960-69c5d54e950f" />
 
 Forks and PRs welcome.
 
