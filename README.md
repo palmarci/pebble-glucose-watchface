@@ -4,15 +4,7 @@
 
 This is my blood glucose watchface. It looks like this:
 
-<img width="144" height="168" alt="Image" src="https://github.com/user-attachments/assets/ed52c276-f736-465b-a529-b09f5383ff79" />
-
-It has:
-
-* 2 hour glucose graph
-* Glucose trend projection
-* Insulin-on-board
-* Pump/sensor status (such as "SUSPENDED")
-* Age of reading (if older than 6 min)
+<img width="822" height="402" alt="Image" src="https://github.com/user-attachments/assets/4fe3f03a-25f9-4095-9803-990e25f91f4f" />
 
 Forks and PRs welcome.
 
