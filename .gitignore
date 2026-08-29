@@ -1,9 +1,9 @@
 build/
 *.pbw
-*.png
 node_modules/
 .DS_Store
 .lock-waf*
+screens/
 # Local clangd config (absolute SDK paths, machine-specific — see CLAUDE.md "Gotchas")
 compile_flags.txt
 

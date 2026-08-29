@@ -44,3 +44,7 @@ quickview platform:
 	just emu {{platform}}
 	./tools/mock_sender.py --emulator {{platform}}
 	just resize {{platform}}
+
+# App store listing screenshots: one emulator at a time, seeded, into screenshots/
+screenshots *args:
+	./tools/screenshots.sh {{args}}

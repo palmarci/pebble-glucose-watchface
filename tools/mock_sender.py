@@ -7,10 +7,10 @@ message carrying a complete snapshot: the watchface replaces its whole graph on 
 it never appends.
 
     tools/mock_sender.py --list
-    tools/mock_sender.py layout
+    tools/mock_sender.py crowded
     tools/mock_sender.py showcase --phone
     tools/mock_sender.py showcase --bg 12.3 --status SUSPENDED
-    tools/mock_sender.py layout --screenshot /tmp/graph.png
+    tools/mock_sender.py crowded --screenshot /tmp/graph.png
 """
 
 import argparse
@@ -109,30 +109,51 @@ def curve(keyframes, ts, window=120):
 
 
 
+# The day both showcase presets sample, as (minutes, mmol) keyframes: 5.4 up to 7.9, back down to a
+# wandering 5.7-6.0 stretch, a rise to a 8.2 peak, then a slow fall. showcase shows the first two
+# hours of it, showcase-full the two hours from 30 min in.
+SHOWCASE_DAY = [
+    (0, 5.4),
+    (30, 7.9),
+    (60, 6.0),
+    (75, 5.7),
+    (90, 6.0),
+    (105, 5.8),
+    (135, 8.0),
+    (150, 8.2),
+    (175, 6.9),
+]
+
 # Each preset returns (points, overrides). Points are [(minutes_ago, mmol)] in any order; they get
 # sorted oldest-first before packing.
 DEFAULT_PRESET = "showcase"
 
 PRESETS = {
     "showcase": (
-        "the default, a good-looking in-range day for screenshots: 5.4 up to 7.9, back down to a "
-        "wandering 5.7-6.0 stretch, then a rise over the last 15 min to 6.9",
+        "the typical view: an in-range day, fresh reading, no status",
         # For the README shot: nothing clipped, nothing stale, no status overlay, and enough shape
         # that the trace, both target lines and the projection are all visible at once.
         # The last keyframe sits past the end of the window (135 > 120) on purpose: smoothstep eases
         # into a keyframe, so ending on one would flatten the newest segment and leave the
         # projection almost horizontal. Cutting the sampling mid-rise keeps the slope steep.
         lambda: (
-            curve(
-                [(0, 5.4), (30, 7.9), (60, 6.0), (75, 5.7), (90, 6.0), (105, 5.8), (135, 8.0)],
-                list(range(0, 121, 5)),
-            ),
+            curve(SHOWCASE_DAY, list(range(0, 121, 5))),
             {"iob": "1.4"},
         ),
     ),
-    "layout": (
-        "every element on screen at once: a two-digit BG, its age counter, IOB and the status strip "
-        "— for checking nothing collides or clips",
+    "showcase-full": (
+        "every extra on screen: age counter and status strip",
+        # The same day as showcase, 30 min further along: the window slides forward over the same
+        # curve, so the two store shots read as one trace continuing rather than two unrelated days.
+        # Sampling stops 7 min short of the window end, so the reading is stale and the age counter
+        # shows.
+        lambda: (
+            curve(SHOWCASE_DAY, list(range(33, 144, 5)), window=150),
+            {"iob": "1.4", "status": "SUSPENDED"},
+        ),
+    ),
+    "crowded": (
+        "worst case for space: two-digit BG, age counter, IOB, status strip",
         # Deliberately the worst case for horizontal space: 10.0 is the widest the big number gets,
         # and it has the age counter on one side and IOB on the other. Sampling stops at t=110 of
         # the 120-minute window, so the reading is genuinely 10 min old and the age counter shows.
