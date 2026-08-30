@@ -11,6 +11,14 @@
 
 // --- Constants ---
 
+// Dark theme by default: black window, white foreground, colored BG value. On B&W platforms
+// (aplite/flint) colors render as black/white, so the value falls back to white there.
+#define COLOR_WINDOW_BG GColorBlack
+#define COLOR_FG        GColorWhite
+#define COLOR_BG_LOW    GColorRed      // below the low line
+#define COLOR_BG_OK     GColorGreen    // within range
+#define COLOR_BG_HIGH   GColorYellow   // above the high line
+
 // Graph config
 #define GRAPH_HOURS 2  // Hours of graph data
 #define STROKE_WIDTH 3 // Graph stroke width in pixels
@@ -47,19 +55,19 @@
 // Don't connect points more than this far apart (a sensor gap draws as a break, not a straight line).
 #define GRAPH_GAP_THRESHOLD_MINUTES 15
 
-// Issue #1: the graph area is fixed to the last 2 h (regardless of the phone's KEY_GRAPH_HOURS) and
-// occupies the left 2/3 of the screen; the right 1/3 shows the extrapolated trend projection (see below).
+// Issue #1: the graph area is fixed to the last 2 h (regardless of the phone's KEY_GRAPH_HOURS). It
+// occupies most of the screen width; the small right region holds the extrapolated trend projection.
 
-#define GRAPH_WIDTH_NUM 2 // graph width = screen width * NUM/DEN; the rest is the projection region
-#define GRAPH_WIDTH_DEN 3
+#define GRAPH_WIDTH_NUM 7 // graph width = screen width * NUM/DEN; the rest is the projection region
+#define GRAPH_WIDTH_DEN 8
 // The value band: BG values map into these GRAPH_BAND_H pixels, starting at this screen y.
 #define GRAPH_BAND_TOP_Y 38
-#define GRAPH_BAND_H 64
+#define GRAPH_BAND_H 92
 // The layer is taller than the value band so a projection leaving a reading near the top or bottom of
 // the range has somewhere to go instead of being clipped away (its length is clamped to the layer, so
 // it shortens rather than vanishing). Asymmetric: more spare screen below the band than above it.
-#define GRAPH_PAD_TOP 8
-#define GRAPH_PAD_BOTTOM 14
+#define GRAPH_PAD_TOP 6
+#define GRAPH_PAD_BOTTOM 8
 // Derived. Axes, trace and projection all live in this one layer, so there is a single coordinate space
 // and the projection pivot cannot drift off the trace. It sits behind the time/BG text, which stay on top.
 #define GRAPH_LAYER_TOP_Y (GRAPH_BAND_TOP_Y - GRAPH_PAD_TOP)
@@ -74,6 +82,15 @@
 #define TREND_PROJ_LEN 12        // projection length start-to-end in px (clamped to stay inside the band)
 #define TREND_PROJ_GAP 6         // gap (px) between the trace's last point and the projection start
 #define TREND_DOT_COUNT 3        // dots drawn along the projection, spread over its (clamped) length
+
+// Fonts: BG value is the biggest (49px), time stays 42px, secondary text bumps to 28.
+#define FONT_BG_VALUE     FONT_KEY_ROBOTO_BOLD_SUBSET_49
+#define FONT_SECONDARY    FONT_KEY_GOTHIC_28_BOLD
+#define FONT_TIME         FONT_KEY_BITHAM_42_BOLD
+
+// Vertical padding at the top and bottom so the content does not hug the bezel edge.
+#define LAYOUT_TOP_GAP    12
+#define LAYOUT_BOTTOM_GAP 6
 
 // Persistent-storage keys (survive watchface unload and watch reboot). Separate namespace from the
 // AppMessage keys in protocol.h. Leaving the watchface for the menu and returning relaunches the app,
@@ -179,7 +196,7 @@ static void debug_box(GRect frame) {
 }
 
 static void debug_layer_update_proc(Layer *layer, GContext *ctx) {
-    graphics_context_set_stroke_color(ctx, GColorBlack);
+    graphics_context_set_stroke_color(ctx, COLOR_FG);
     for (unsigned i = 0; i < s_debug_box_count; i++) {
         draw_layer_outline(ctx, s_debug_boxes[i]);
     }
@@ -199,6 +216,21 @@ static int minutes_ago(void) {
 // outage no message arrives to clear the display, so this is re-evaluated from the minute tick.
 static bool is_stale(void) { return has_reading() && minutes_ago() >= STALE_MINUTES; }
 
+// Map the latest BG (mg/dL/2) to a display color by the high/low threshold lines.
+static GColor prv_bg_color(void) {
+    if (s_graph_count == 0) {
+        return COLOR_FG;
+    }
+    const uint8_t bg = s_graph_bg_values[s_graph_count - 1];
+    if (bg < s_graph_low_line) {
+        return COLOR_BG_LOW;
+    }
+    if (bg > s_graph_high_line) {
+        return COLOR_BG_HIGH;
+    }
+    return COLOR_BG_OK;
+}
+
 static void update_bg_display(void) {
     // Stale -> blank the number rather than showing a value that hasn't updated in a while (a stale BG
     // sat on screen for ~8 h during an overnight outage). The "ago" label still conveys how old it is.
@@ -206,8 +238,14 @@ static void update_bg_display(void) {
     // pump has no sensor value), so the watch never invents it -- every "---" mirrors the pump.
     // Guard the layer: a data message can arrive before window_load creates it (the on-watch sender
     // injects with zero latency, unlike a phone's), and text_layer_set_text(NULL,..) hard-faults.
-    if (s_bg_layer)
+    if (s_bg_layer) {
         text_layer_set_text(s_bg_layer, is_stale() ? "" : s_bg_string);
+        // Color the value by range: red below the low line, yellow above the high line, green in
+        // between. Uses the latest graph point (wire units mg/dL/2, same scale as the threshold
+        // lines); falls back to the default foreground if there is no graph yet. On B&W platforms
+        // every color maps to white so the value always stays readable.
+        text_layer_set_text_color(s_bg_layer, PBL_IF_COLOR_ELSE(prv_bg_color(), GColorWhite));
+    }
 }
 
 static void update_ago_display(void) {
@@ -241,7 +279,7 @@ static void update_time_and_date(void) {
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
     strftime(s_time_display, sizeof(s_time_display), clock_is_24h_style() ? STR_TIME_24H_FMT : STR_TIME_12H_FMT, t);
-    strftime(s_date_display, sizeof(s_date_display), "%a %d", t);
+    strftime(s_date_display, sizeof(s_date_display), "%A, %d", t);
     // Guarded for the same reason as the BG/ago/IOB layers: the tick is subscribed before
     // window_load creates the layers, so a tick landing in the launch gap would hit
     // text_layer_set_text(NULL,..) and hard-fault. window_load re-renders, so nothing is lost.
@@ -266,7 +304,7 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
     }
     const int16_t w = layer_get_bounds(layer).size.w;
 
-    graphics_context_set_text_color(ctx, GColorBlack);
+    graphics_context_set_text_color(ctx, COLOR_FG);
     graphics_draw_text(ctx, s_status_string, fonts_get_system_font(STATUS_FONT), GRect(0, 0, w, STATUS_H),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
@@ -282,6 +320,9 @@ static int graph_y(int bg) {
 }
 
 static void draw_graph_axes(GContext *ctx, GRect bounds) {
+    // Explicit fg color: the default stroke color is black, which is invisible on the dark
+    // background (draw_bg_graph sets COLOR_FG later, but the axes draw first).
+    graphics_context_set_stroke_color(ctx, COLOR_FG);
     const int width = bounds.size.w;
     const int hi_y = graph_y(s_graph_high_line);
     const int lo_y = graph_y(s_graph_low_line);
@@ -310,7 +351,7 @@ static void draw_bg_graph(GContext *ctx, GRect bounds) {
     const uint32_t now = time(NULL);
     const int graph_minutes = GRAPH_HOURS * 60;
 
-    graphics_context_set_stroke_color(ctx, GColorBlack);
+    graphics_context_set_stroke_color(ctx, COLOR_FG);
     graphics_context_set_stroke_width(ctx, STROKE_WIDTH);
 
     bool have_prev = false;
@@ -331,6 +372,7 @@ static void draw_bg_graph(GContext *ctx, GRect bounds) {
             graphics_draw_line(ctx, GPoint(prev_x, prev_y), GPoint(x, y));
         } else if (!join_next) {
             // Gap on both sides: Draw an isolated dot
+            graphics_context_set_fill_color(ctx, COLOR_FG);
             graphics_fill_rect(ctx, GRect(x - STROKE_OFFSET, y - STROKE_OFFSET, STROKE_WIDTH, STROKE_WIDTH), 0,
                                GCornerNone);
         }
@@ -411,7 +453,7 @@ static void trend_draw_projection(GContext *ctx, GRect bounds, GPoint pivot, flo
 
     // Dots along the line (Pebble has no native dashed line): TREND_DOT_COUNT small filled squares,
     // each matching the trace's thickness, spread evenly from the start gap to the clamped end.
-    graphics_context_set_fill_color(ctx, GColorBlack);
+    graphics_context_set_fill_color(ctx, COLOR_FG);
     const float span = end - TREND_PROJ_GAP;
     for (int k = 0; k < TREND_DOT_COUNT; k++) {
         const float t = TREND_PROJ_GAP + span * k / (TREND_DOT_COUNT - 1);
@@ -623,7 +665,7 @@ static void bluetooth_callback(bool connected) {
 static TextLayer *make_text_layer(Layer *root, GRect frame, const char *font_key, GTextAlignment align) {
     TextLayer *layer = text_layer_create(frame);
     text_layer_set_background_color(layer, GColorClear);
-    text_layer_set_text_color(layer, GColorBlack);
+    text_layer_set_text_color(layer, COLOR_FG);
     text_layer_set_font(layer, fonts_get_system_font(font_key));
     text_layer_set_text_alignment(layer, align);
     layer_add_child(root, text_layer_get_layer(layer));
@@ -644,6 +686,8 @@ int cap_offset(const char *font_key) {
         int offset;
     } table[] = {
         {FONT_KEY_BITHAM_42_BOLD, 13},
+        {FONT_KEY_ROBOTO_BOLD_SUBSET_49, 15},
+        {FONT_KEY_GOTHIC_28_BOLD, 11},
         {FONT_KEY_GOTHIC_24_BOLD, 10},
         {FONT_KEY_GOTHIC_18_BOLD, 7},
     };
@@ -658,41 +702,43 @@ int cap_offset(const char *font_key) {
 }
 
 static void window_load(Window *window) {
-    window_set_background_color(window, GColorWhite);
+    window_set_background_color(window, COLOR_WINDOW_BG);
     Layer *root = window_get_root_layer(window);
     GRect b = layer_get_bounds(root);
 
     const int edge_margin = PBL_IF_RECT_ELSE(6, 12);
     const int internal_margin = 3;
+    const int top_gap = PBL_IF_RECT_ELSE(LAYOUT_TOP_GAP, 0);
+    const int bottom_gap = PBL_IF_RECT_ELSE(LAYOUT_BOTTOM_GAP, 0);
 
     // BG value - top center
     {
-        const int y = edge_margin - cap_offset(FONT_KEY_BITHAM_42_BOLD);
-        const int h = 42;
+        const int y = top_gap + edge_margin - cap_offset(FONT_BG_VALUE);
+        const int h = 49;
         s_bg_layer =
-            make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
+            make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_BG_VALUE, GTextAlignmentCenter);
 
         // debug_box(GRect(0, y, b.size.w, h)); // Debug
     }
 
     // Time ago - top left
     {
-        const int w = 48;
-        const int h = 24;
+        const int w = 52;
+        const int h = 28;
         const int x = PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_WIDTH / 10);
-        const int y = PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_HEIGHT / 6);
-        s_ago_layer = make_text_layer(root, GRect(x, y, w, h), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentLeft);
+        const int y = PBL_IF_RECT_ELSE(top_gap + edge_margin, PBL_DISPLAY_HEIGHT / 6);
+        s_ago_layer = make_text_layer(root, GRect(x, y, w, h), FONT_SECONDARY, GTextAlignmentLeft);
 
         // debug_box(GRect(x, y, w, h)); // Debug
     }
 
     // Insulin on board - top right
     {
-        const int w = 48;
-        const int h = 24;
+        const int w = 52;
+        const int h = 28;
         const int x = PBL_DISPLAY_WIDTH - w - PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_WIDTH / 10);
-        const int y = PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_HEIGHT / 6);
-        s_iob_layer = make_text_layer(root, GRect(x, y, w, h), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentRight);
+        const int y = PBL_IF_RECT_ELSE(top_gap + edge_margin, PBL_DISPLAY_HEIGHT / 6);
+        s_iob_layer = make_text_layer(root, GRect(x, y, w, h), FONT_SECONDARY, GTextAlignmentRight);
 
         // debug_box(GRect(x, y, w, h)); // Debug
     }
@@ -717,9 +763,9 @@ static void window_load(Window *window) {
     }
 
     // Current date - centered near bottom
-    const int date_y = PBL_DISPLAY_HEIGHT - edge_margin - 24;
+    const int date_y = PBL_DISPLAY_HEIGHT - bottom_gap - edge_margin - 30;
     {
-        const int h = 24;
+        const int h = 30;  // taller than the font so descenders ("y" in "Saturday") are not clipped
         const int y = date_y;
         s_date_layer =
             make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentCenter);
@@ -732,7 +778,7 @@ static void window_load(Window *window) {
         const int h = 42;
         const int y = date_y + cap_offset(FONT_KEY_GOTHIC_24_BOLD) - internal_margin - h;
         s_time_layer =
-            make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
+            make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_TIME, GTextAlignmentCenter);
 
         // debug_box(GRect(0, y, PBL_DISPLAY_WIDTH, h)); // Debug
     }
