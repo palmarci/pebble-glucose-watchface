@@ -57,9 +57,9 @@ KEY_BG_TIMESTAMP = 10
 KEY_BG_STRING = 11
 KEY_IOB_STRING = 14
 KEY_STATUS_STRING = 15
-KEY_GRAPH_DATA = 17
-KEY_GRAPH_HIGH_LINE = 18
-KEY_GRAPH_LOW_LINE = 19
+KEY_GRAPH_DATA = 30
+KEY_GRAPH_HIGH_LINE = 31
+KEY_GRAPH_LOW_LINE = 32
 
 # Wire values are mg/dL / 2, so one wire unit is 2 mg/dL. Presets are authored in mmol/L because
 # that's what the watch displays and what a reading looks like to a human.

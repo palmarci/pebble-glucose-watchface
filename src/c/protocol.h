@@ -22,9 +22,9 @@
 #define KEY_STATUS_STRING 15 // string, status line e.g. "SUSPENDED"; "" = nothing to show
 
 // Sender -> watch: BG graph.
-#define KEY_GRAPH_DATA 17      // byte array: [ref_ts u32 LE][count u16 LE][offset_min u16 LE ×n][bg u8 ×n]
-#define KEY_GRAPH_HIGH_LINE 18 // uint8: high target line, mg/dL / 2 (e.g. 90 = 180 mg/dL = 10.0 mmol/L)
-#define KEY_GRAPH_LOW_LINE 19  // uint8: low target line, mg/dL / 2 (e.g. 36 = 72 mg/dL = 4.0 mmol/L)
+#define KEY_GRAPH_DATA 30      // byte array: [ref_ts u32 LE][count u16 LE][offset_min u16 LE ×n][bg u8 ×n]
+#define KEY_GRAPH_HIGH_LINE 31 // uint8: high target line, mg/dL / 2 (e.g. 90 = 180 mg/dL = 10.0 mmol/L)
+#define KEY_GRAPH_LOW_LINE 32  // uint8: low target line, mg/dL / 2 (e.g. 36 = 72 mg/dL = 4.0 mmol/L)
 
 // Capability bits (single-value fields this watchface wants). Graph is gated by KEY_GRAPH_HOURS.
 #define CAP_BG (1 << 0)
