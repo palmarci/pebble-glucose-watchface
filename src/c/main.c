@@ -665,39 +665,65 @@ static void window_load(Window *window) {
     const int edge_margin = PBL_IF_RECT_ELSE(6, 12);
     const int internal_margin = 3;
 
-    // BG value - top center
+    // --- BG value ------------------------------------------------------------
     {
+#if PBL_RECT
+        const int x = edge_margin;
+        const int w = 92; // Exactly enough for "20.0" in Bitham 42 bold
+        const GTextAlignment a = GTextAlignmentRight;
+#else
+        const int x = 0;
+        const int w = PBL_DISPLAY_WIDTH;
+        const GTextAlignment a = GTextAlignmentCenter;
+#endif
         const int y = edge_margin - cap_offset(FONT_KEY_BITHAM_42_BOLD);
         const int h = 42;
-        s_bg_layer =
-            make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
 
-        // debug_box(GRect(0, y, b.size.w, h)); // Debug
+        s_bg_layer = make_text_layer(root, GRect(x, y, w, h), FONT_KEY_BITHAM_42_BOLD, a);
+        // debug_box(GRect(x, y, w, h));
     }
 
-    // Time ago - top left
+    // --- Time ago ------------------------------------------------------------
+    const int y_time_ago = PBL_IF_RECT_ELSE(
+        4 - cap_offset(FONT_KEY_GOTHIC_24_BOLD), // Margin 4 makes the IOB layer below perfectly match the BG baseline
+        PBL_DISPLAY_HEIGHT / 6);
     {
         const int w = 48;
         const int h = 24;
-        const int x = PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_WIDTH / 10);
-        const int y = PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_HEIGHT / 6);
-        s_ago_layer = make_text_layer(root, GRect(x, y, w, h), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentLeft);
+        const int y = y_time_ago;
 
-        // debug_box(GRect(x, y, w, h)); // Debug
+#if PBL_RECT
+        // Top right
+        const int x = PBL_DISPLAY_WIDTH - w - edge_margin;
+        const GTextAlignment a = GTextAlignmentRight;
+#else
+        // Top left
+        const int x = PBL_DISPLAY_HEIGHT / 10;
+        const GTextAlignment a = GTextAlignmentLeft;
+#endif
+
+        s_ago_layer = make_text_layer(root, GRect(x, y, w, h), FONT_KEY_GOTHIC_24_BOLD, a);
+        // debug_box(GRect(x, y, w, h));
     }
 
-    // Insulin on board - top right
+    // --- Insulin on board ----------------------------------------------------
     {
         const int w = 48;
         const int h = 24;
-        const int x = PBL_DISPLAY_WIDTH - w - PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_WIDTH / 10);
-        const int y = PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_HEIGHT / 6);
-        s_iob_layer = make_text_layer(root, GRect(x, y, w, h), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentRight);
+        const GTextAlignment a = GTextAlignmentRight;
 
-        // debug_box(GRect(x, y, w, h)); // Debug
+#if PBL_RECT
+        const int x = PBL_DISPLAY_WIDTH - w - edge_margin;
+        const int y = y_time_ago + 24 - cap_offset(FONT_KEY_GOTHIC_24_BOLD) + internal_margin;
+#else
+        const int x = PBL_DISPLAY_WIDTH - w - PBL_DISPLAY_WIDTH / 10;
+        const int y = PBL_DISPLAY_HEIGHT / 6;
+#endif
+        s_iob_layer = make_text_layer(root, GRect(x, y, w, h), FONT_KEY_GOTHIC_24_BOLD, a);
+        // debug_box(GRect(x, y, w, h));
     }
 
-    // Graph - centered vertically
+    // --- Graph ---------------------------------------------------------------
     const int y_graph = (PBL_DISPLAY_HEIGHT - GRAPH_LAYER_H) / 2 - 11;
     {
         const int y = y_graph;
@@ -707,16 +733,16 @@ static void window_load(Window *window) {
         // debug_box(GRect(0, y + GRAPH_PAD_TOP, PBL_DISPLAY_WIDTH, GRAPH_BAND_H)); // Debug (data band only)
     }
 
-    // Pump status - centered below graph
+    // --- Status --------------------------------------------------------------
     {
         const int y = y_graph + GRAPH_LAYER_H - STATUS_H;
         const int h = STATUS_H; // Todo tighten and unify
         s_status_layer = make_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), status_layer_update_proc);
 
-        // debug_box(GRect(0, STATUS_TOP_Y, b.size.w, STATUS_H)); // Debug
+        // debug_box(GRect(0, STATUS_TOP_Y, b.size.w, STATUS_H));
     }
 
-    // Current date - centered near bottom
+    // --- Date ----------------------------------------------------------------
     const int date_y = PBL_DISPLAY_HEIGHT - edge_margin - 24;
     {
         const int h = 24;
@@ -724,17 +750,17 @@ static void window_load(Window *window) {
         s_date_layer =
             make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentCenter);
 
-        // debug_box(GRect(0, y, PBL_DISPLAY_WIDTH, h)); // Debug
+        // debug_box(GRect(0, y, PBL_DISPLAY_WIDTH, h));
     }
 
-    // Current time - centered above date
+    // --- Time ----------------------------------------------------------------
     {
         const int h = 42;
         const int y = date_y + cap_offset(FONT_KEY_GOTHIC_24_BOLD) - internal_margin - h;
         s_time_layer =
             make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_KEY_BITHAM_42_BOLD, GTextAlignmentCenter);
 
-        // debug_box(GRect(0, y, PBL_DISPLAY_WIDTH, h)); // Debug
+        // debug_box(GRect(0, y, PBL_DISPLAY_WIDTH, h));
     }
 
     // Last, so the outlines draw over every other layer.
