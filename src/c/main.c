@@ -653,7 +653,6 @@ int cap_offset(const char *font_key) {
 static void window_load(Window *window) {
     window_set_background_color(window, GColorWhite);
     Layer *root = window_get_root_layer(window);
-    GRect b = layer_get_bounds(root);
 
     const int edge_margin = PBL_IF_RECT_ELSE(6, 12);
     const int internal_margin = 3;
@@ -732,7 +731,7 @@ static void window_load(Window *window) {
         const int h = STATUS_H; // Todo tighten and unify
         s_status_layer = make_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), status_layer_update_proc);
 
-        // add_debug_outline(GRect(0, STATUS_TOP_Y, b.size.w, STATUS_H));
+        // add_debug_outline(GRect(0, STATUS_TOP_Y, PBL_DISPLAY_WIDTH, STATUS_H));
     }
 
     // --- Date ----------------------------------------------------------------
@@ -757,7 +756,7 @@ static void window_load(Window *window) {
     }
 
     // Last, so the outlines draw over every other layer.
-    s_debug_layer = make_layer(root, b, debug_layer_update_proc);
+    s_debug_layer = make_layer(root, layer_get_bounds(root), debug_layer_update_proc);
 
     update_bg_display();
     update_ago_display();
