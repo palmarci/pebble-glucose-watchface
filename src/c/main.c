@@ -277,6 +277,7 @@ static void draw_graph_axes(GContext *ctx, GRect bounds) {
     const int width = bounds.size.w;
     const int hi_y = graph_y(s_graph_high_line);
     const int lo_y = graph_y(s_graph_low_line);
+    graphics_context_set_stroke_color(ctx, GColorBlack);
 
     // Draw high and low lines
     graphics_draw_line(ctx, GPoint(0, hi_y), GPoint(width, hi_y));
