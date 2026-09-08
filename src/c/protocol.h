@@ -1,32 +1,54 @@
-// Pebble Glucose Protocol — the keys this watchface uses.
+// Pebble Glucose Protocol
 //
-// Raw integer AppMessage keys, shared verbatim with the sender (the Android bridge). This watchface
-// implements a SUBSET of the protocol (BG + timestamp, IOB, status, graph); the full reference —
-// including delta, trend arrow, and sender battery — is at
-// https://github.com/mortenfyhn/pebble-glucose-protocol.
+// Copy this file into your watchface/sender project.
+// Port to other languages as needed.
+//
+// See PROTOCOL.md for all definitions.
 
 #pragma once
 
-// Bump for breaking protocol changes.
-#define PROTOCOL_VERSION 1
+#define PROTOCOL_VERSION 1 // draft!
 
-// Watch -> sender: capability announcement / "ready" ping.
+// Message keys: Watchface -> sender (capability announcement)
 #define KEY_PROTOCOL_VERSION 0
 #define KEY_CAPABILITIES 1
-#define KEY_GRAPH_HOURS 2 // hours of graph history wanted; 0 = no graph
+#define KEY_GRAPH_HOURS 2
+// Keys 3-9 reserved
 
-// Sender -> watch: current reading.
-#define KEY_BG_TIMESTAMP 10  // uint32, UNIX epoch seconds of the reading
-#define KEY_BG_STRING 11     // string, pre-formatted BG, e.g. "7.5"
-#define KEY_IOB_STRING 14    // string, pre-formatted insulin-on-board, e.g. "2.5"
-#define KEY_STATUS_STRING 15 // string, status line e.g. "SUSPENDED"; "" = nothing to show
+// Message keys: Sender -> watchface (data)
+#define KEY_BG_TIMESTAMP 10
+#define KEY_BG_STRING 11
+#define KEY_DELTA_STRING 12
+#define KEY_TREND_ARROW 13
+#define KEY_IOB_STRING 14
+#define KEY_STATUS_STRING 15
+#define KEY_SENDER_BATTERY 16
+// Keys 17-29 reserved
 
-// Sender -> watch: BG graph.
-#define KEY_GRAPH_DATA 17      // byte array: [ref_ts u32 LE][count u16 LE][offset_min u16 LE ×n][bg u8 ×n]
-#define KEY_GRAPH_HIGH_LINE 18 // uint8: high target line, mg/dL / 2 (e.g. 90 = 180 mg/dL = 10.0 mmol/L)
-#define KEY_GRAPH_LOW_LINE 19  // uint8: low target line, mg/dL / 2 (e.g. 36 = 72 mg/dL = 4.0 mmol/L)
+// Message keys: Sender -> watchface (raw graph)
+#define KEY_GRAPH_DATA 30
+#define KEY_GRAPH_HIGH_LINE 31
+#define KEY_GRAPH_LOW_LINE 32
+// Keys 33-39 reserved
 
-// Capability bits (single-value fields this watchface wants). Graph is gated by KEY_GRAPH_HOURS.
+// Keys 40-49 reserved for bitmap graph
+
+// Capability bits
 #define CAP_BG (1 << 0)
+#define CAP_TREND_ARROW (1 << 1)
+#define CAP_DELTA (1 << 2)
 #define CAP_IOB (1 << 3)
 #define CAP_STATUS (1 << 4)
+#define CAP_SENDER_BATTERY (1 << 5)
+
+// Trend arrow indices
+#define TREND_UNKNOWN 0
+#define TREND_FLAT 1
+#define TREND_SLANT_UP 2
+#define TREND_SLANT_DOWN 3
+#define TREND_UP 4
+#define TREND_DOWN 5
+#define TREND_DOUBLE_UP 6
+#define TREND_DOUBLE_DOWN 7
+#define TREND_TRIPLE_UP 8
+#define TREND_TRIPLE_DOWN 9

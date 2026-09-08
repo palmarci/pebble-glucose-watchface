@@ -128,10 +128,10 @@ static Layer *s_debug_layer; // draws the debug outlines below, nothing else
 
 // Debug outlines. Frames are registered rather than layers, so a TextLayer, a custom layer and a
 // region that is no layer at all (the graph's value band) all work the same way. Boxes are switched
-// on by commenting the debug_box() calls in window_load in or out.
-#define DEBUG_MAX_BOXES 8
-static GRect s_debug_boxes[DEBUG_MAX_BOXES];
-static unsigned s_debug_box_count;
+// on by commenting the add_debug_outline() calls in window_load in or out.
+#define DEBUG_MAX_OUTLINES 8
+static GRect s_debug_outlines[DEBUG_MAX_OUTLINES];
+static unsigned s_num_debug_outlines;
 
 // Latest reading from the phone.
 static char s_bg_string[16] = "";   // whatever the phone last sent; "" until the first reading arrives
@@ -171,34 +171,34 @@ static void safe_strncpy(char *dst, const char *src, size_t dst_size) {
 
 static bool has_reading(void) { return s_bg_timestamp != 0; }
 
-#define DEBUG_OUTLINE_STEP 2 // pixels between dots
-
 static void draw_layer_outline(GContext *ctx, GRect bounds) {
     const int16_t left = bounds.origin.x, top = bounds.origin.y;
     const int16_t right = left + bounds.size.w - 1, bottom = top + bounds.size.h - 1;
-    for (int16_t x = left; x <= right; x += DEBUG_OUTLINE_STEP) {
+    for (int16_t x = left; x <= right; x += 2) {
         graphics_draw_pixel(ctx, GPoint(x, top));
         graphics_draw_pixel(ctx, GPoint(x, bottom));
     }
-    for (int16_t y = top; y <= bottom; y += DEBUG_OUTLINE_STEP) {
+    for (int16_t y = top; y <= bottom; y += 2) {
         graphics_draw_pixel(ctx, GPoint(left, y));
         graphics_draw_pixel(ctx, GPoint(right, y));
     }
 }
 
 // A TextLayer owns its update proc, so its box has to be drawn from somewhere else: this layer sits
-// over the whole window, on top of everything, and outlines the frames switched on in s_debug_boxes.
-// Frames are parent-relative and this layer spans the root, so they need no translation.
-static void debug_box(GRect frame) {
-    if (s_debug_box_count < DEBUG_MAX_BOXES) {
-        s_debug_boxes[s_debug_box_count++] = frame;
+// over the whole window, on top of everything, and outlines the frames switched on in
+// s_debug_outlines. Frames are parent-relative and this layer spans the root, so they need no
+// translation.
+static void add_debug_outline(GRect frame) {
+    if (s_num_debug_outlines < DEBUG_MAX_OUTLINES) {
+        s_debug_outlines[s_num_debug_outlines++] = frame;
     }
 }
 
 static void debug_layer_update_proc(Layer *layer, GContext *ctx) {
+    // Explicit fg color: the default stroke color is black, which is invisible on the dark background.
     graphics_context_set_stroke_color(ctx, COLOR_FG);
-    for (unsigned i = 0; i < s_debug_box_count; i++) {
-        draw_layer_outline(ctx, s_debug_boxes[i]);
+    for (unsigned i = 0; i < s_num_debug_outlines; i++) {
+        draw_layer_outline(ctx, s_debug_outlines[i]);
     }
 }
 
@@ -704,24 +704,23 @@ int cap_offset(const char *font_key) {
 static void window_load(Window *window) {
     window_set_background_color(window, COLOR_WINDOW_BG);
     Layer *root = window_get_root_layer(window);
-    GRect b = layer_get_bounds(root);
 
     const int edge_margin = PBL_IF_RECT_ELSE(6, 12);
     const int internal_margin = 3;
     const int top_gap = PBL_IF_RECT_ELSE(LAYOUT_TOP_GAP, 0);
     const int bottom_gap = PBL_IF_RECT_ELSE(LAYOUT_BOTTOM_GAP, 0);
 
-    // BG value - top center
+    // --- BG value ------------------------------------------------------------
     {
         const int y = top_gap + edge_margin - cap_offset(FONT_BG_VALUE);
         const int h = 49;
         s_bg_layer =
             make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_BG_VALUE, GTextAlignmentCenter);
 
-        // debug_box(GRect(0, y, b.size.w, h)); // Debug
+        // add_debug_outline(GRect(0, y, PBL_DISPLAY_WIDTH, h));
     }
 
-    // Time ago - top left
+    // --- Time ago ------------------------------------------------------------
     {
         const int w = 52;
         const int h = 28;
@@ -729,10 +728,10 @@ static void window_load(Window *window) {
         const int y = PBL_IF_RECT_ELSE(top_gap + edge_margin, PBL_DISPLAY_HEIGHT / 6);
         s_ago_layer = make_text_layer(root, GRect(x, y, w, h), FONT_SECONDARY, GTextAlignmentLeft);
 
-        // debug_box(GRect(x, y, w, h)); // Debug
+        // add_debug_outline(GRect(x, y, w, h));
     }
 
-    // Insulin on board - top right
+    // --- Insulin on board ----------------------------------------------------
     {
         const int w = 52;
         const int h = 28;
@@ -740,29 +739,29 @@ static void window_load(Window *window) {
         const int y = PBL_IF_RECT_ELSE(top_gap + edge_margin, PBL_DISPLAY_HEIGHT / 6);
         s_iob_layer = make_text_layer(root, GRect(x, y, w, h), FONT_SECONDARY, GTextAlignmentRight);
 
-        // debug_box(GRect(x, y, w, h)); // Debug
+        // add_debug_outline(GRect(x, y, w, h));
     }
 
-    // Graph - centered vertically
+    // --- Graph ---------------------------------------------------------------
     const int y_graph = (PBL_DISPLAY_HEIGHT - GRAPH_LAYER_H) / 2 - 11;
     {
         const int y = y_graph;
         s_graph_layer = make_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, GRAPH_LAYER_H), graph_layer_update_proc);
 
-        // debug_box(GRect(0, y, PBL_DISPLAY_WIDTH, GRAPH_LAYER_H)); // Debug (entire layer)
-        // debug_box(GRect(0, y + GRAPH_PAD_TOP, PBL_DISPLAY_WIDTH, GRAPH_BAND_H)); // Debug (data band only)
+        // add_debug_outline(GRect(0, y, PBL_DISPLAY_WIDTH, GRAPH_LAYER_H)); // Debug (entire layer)
+        // add_debug_outline(GRect(0, y + GRAPH_PAD_TOP, PBL_DISPLAY_WIDTH, GRAPH_BAND_H)); // Debug (data band only)
     }
 
-    // Pump status - centered below graph
+    // --- Status --------------------------------------------------------------
     {
         const int y = y_graph + GRAPH_LAYER_H - STATUS_H;
         const int h = STATUS_H; // Todo tighten and unify
         s_status_layer = make_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), status_layer_update_proc);
 
-        // debug_box(GRect(0, STATUS_TOP_Y, b.size.w, STATUS_H)); // Debug
+        // add_debug_outline(GRect(0, STATUS_TOP_Y, PBL_DISPLAY_WIDTH, STATUS_H));
     }
 
-    // Current date - centered near bottom
+    // --- Date ----------------------------------------------------------------
     const int date_y = PBL_DISPLAY_HEIGHT - bottom_gap - edge_margin - 30;
     {
         const int h = 30;  // taller than the font so descenders ("y" in "Saturday") are not clipped
@@ -770,21 +769,21 @@ static void window_load(Window *window) {
         s_date_layer =
             make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_KEY_GOTHIC_24_BOLD, GTextAlignmentCenter);
 
-        // debug_box(GRect(0, y, PBL_DISPLAY_WIDTH, h)); // Debug
+        // add_debug_outline(GRect(0, y, PBL_DISPLAY_WIDTH, h));
     }
 
-    // Current time - centered above date
+    // --- Time ----------------------------------------------------------------
     {
         const int h = 42;
         const int y = date_y + cap_offset(FONT_KEY_GOTHIC_24_BOLD) - internal_margin - h;
         s_time_layer =
             make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_TIME, GTextAlignmentCenter);
 
-        // debug_box(GRect(0, y, PBL_DISPLAY_WIDTH, h)); // Debug
+        // add_debug_outline(GRect(0, y, PBL_DISPLAY_WIDTH, h));
     }
 
     // Last, so the outlines draw over every other layer.
-    s_debug_layer = make_layer(root, b, debug_layer_update_proc);
+    s_debug_layer = make_layer(root, layer_get_bounds(root), debug_layer_update_proc);
 
     update_bg_display();
     update_ago_display();
