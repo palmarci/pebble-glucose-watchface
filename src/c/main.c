@@ -83,8 +83,10 @@
 #define TREND_PROJ_GAP 6         // gap (px) between the trace's last point and the projection start
 #define TREND_DOT_COUNT 3        // dots drawn along the projection, spread over its (clamped) length
 
-// Fonts: BG value is the biggest (49px), time stays 42px, secondary text bumps to 28.
-#define FONT_BG_VALUE     FONT_KEY_ROBOTO_BOLD_SUBSET_49
+// Fonts: BG value at 42px bold — the bold weight renders a clearly visible decimal point (the
+// Roboto 49 subset's period is a near-invisible dot, and the medium-numbers font's is too thin).
+// Time stays 42px, secondary text bumps to 28.
+#define FONT_BG_VALUE     FONT_KEY_BITHAM_42_BOLD
 #define FONT_SECONDARY    FONT_KEY_GOTHIC_28_BOLD
 #define FONT_TIME         FONT_KEY_BITHAM_42_BOLD
 
@@ -713,7 +715,7 @@ static void window_load(Window *window) {
     // --- BG value ------------------------------------------------------------
     {
         const int y = top_gap + edge_margin - cap_offset(FONT_BG_VALUE);
-        const int h = 49;
+        const int h = 42;
         s_bg_layer =
             make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_BG_VALUE, GTextAlignmentCenter);
 
