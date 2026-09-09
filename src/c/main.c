@@ -16,11 +16,6 @@
 #define STROKE_WIDTH 3 // Graph stroke width in pixels
 #define STROKE_OFFSET (STROKE_WIDTH / 2)
 
-// String formatting
-#define STR_IOB_FMT "%sU"       // insulin on board, e.g. "2.5U"
-#define STR_AGO_MIN_FMT "%dm"   // age of the current BG value, in minutes, e.g. "5m"
-#define STR_AGO_HOURS_FMT "%dh" // age of the current BG value, >= 1 hour
-
 // --- Messy stuff, to be cleaned up ---
 
 // Show "---" instead of a stale value once the last reading is this old. CGM cadence is 5 min, so
@@ -28,9 +23,6 @@
 // MUST match the bridge's STALE_SECONDS (minimed-pebble-bridge BridgeForegroundService) so the watch
 // and the phone status-bar icon go stale at the same time.
 #define STALE_MINUTES 15
-// Below this age a reading is "fresh" and the time-ago label is hidden (it's only useful as an
-// ageing/staleness hint once a reading has been missed).
-#define FRESH_MINUTES 6
 
 // Graph config. We ask the phone for (and buffer) up to GRAPH_MAX_HOURS of history, but the visible
 // window is fixed to GRAPH_HOURS (below); the extra buffered history is kept for future use.
@@ -201,28 +193,30 @@ static void update_bg_display(void) {
 }
 
 static void update_ago_display(void) {
-    // How old the current BG value is (in minutes). Hidden while fresh; shown only once a reading has
-    // been missed, so it reads as a staleness hint rather than constant clutter.
     int mins = minutes_ago();
-    if (mins < FRESH_MINUTES) {
+
+    if (mins < 6) {
+        // Hide when fresh
         s_ago_display[0] = '\0';
     } else if (mins < 60) {
-        snprintf(s_ago_display, sizeof(s_ago_display), STR_AGO_MIN_FMT, mins);
+        // Minutes ago
+        snprintf(s_ago_display, sizeof(s_ago_display), "%dm", mins);
     } else {
-        snprintf(s_ago_display, sizeof(s_ago_display), STR_AGO_HOURS_FMT, mins / 60);
+        // Hours ago
+        snprintf(s_ago_display, sizeof(s_ago_display), "%dh", mins / 60);
     }
+
     if (s_ago_layer)
         text_layer_set_text(s_ago_layer, s_ago_display);
 }
 
 static void update_iob_display(void) {
     if (s_iob_string[0] == '\0' || is_stale()) {
-        // Blank when stale for the same reason as BG: a frozen IOB is misleading (it decays to ~0 over
-        // an outage), so don't keep showing the last value.
         s_iob_display[0] = '\0';
     } else {
-        snprintf(s_iob_display, sizeof(s_iob_display), STR_IOB_FMT, s_iob_string);
+        snprintf(s_iob_display, sizeof(s_iob_display), "%sU", s_iob_string);
     }
+
     if (s_iob_layer)
         text_layer_set_text(s_iob_layer, s_iob_display);
 }
