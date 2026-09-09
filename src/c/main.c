@@ -20,8 +20,6 @@
 #define STR_IOB_FMT "%sU"       // insulin on board, e.g. "2.5U"
 #define STR_AGO_MIN_FMT "%dm"   // age of the current BG value, in minutes, e.g. "5m"
 #define STR_AGO_HOURS_FMT "%dh" // age of the current BG value, >= 1 hour
-#define STR_TIME_24H_FMT "%H:%M"
-#define STR_TIME_12H_FMT "%I:%M"
 
 // --- Messy stuff, to be cleaned up ---
 
@@ -231,12 +229,18 @@ static void update_iob_display(void) {
 
 static void update_time_and_date(void) {
     time_t now = time(NULL);
-    struct tm *t = localtime(&now);
-    strftime(s_time_display, sizeof(s_time_display), clock_is_24h_style() ? STR_TIME_24H_FMT : STR_TIME_12H_FMT, t);
-    strftime(s_date_display, sizeof(s_date_display), "%a %d", t);
-    // Guarded for the same reason as the BG/ago/IOB layers: the tick is subscribed before
-    // window_load creates the layers, so a tick landing in the launch gap would hit
-    // text_layer_set_text(NULL,..) and hard-fault. window_load re-renders, so nothing is lost.
+    struct tm *time = localtime(&now);
+
+    strftime(s_time_display, sizeof(s_time_display), clock_is_24h_style() ? "%H:%M" : "%I:%M", time);
+
+    if (time->tm_mday < 10) {
+        // %e = " 9" with a space or "10"
+        strftime(s_date_display, sizeof(s_date_display), "%a%e   W%V", time);
+    } else {
+        // %d = "09" with a zero, or "10"
+        strftime(s_date_display, sizeof(s_date_display), "%a %d   W%V", time);
+    }
+
     if (s_time_layer)
         text_layer_set_text(s_time_layer, s_time_display);
     if (s_date_layer)
