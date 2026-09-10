@@ -57,6 +57,7 @@ KEY_BG_TIMESTAMP = 10
 KEY_BG_STRING = 11
 KEY_IOB_STRING = 14
 KEY_STATUS_STRING = 15
+KEY_PUMP_CONNECTED = 17
 KEY_GRAPH_DATA = 30
 KEY_GRAPH_HIGH_LINE = 31
 KEY_GRAPH_LOW_LINE = 32
@@ -281,6 +282,12 @@ def main():
         "--low", type=int, help="low target line, mg/dL / 2 (default 36 = 4.0 mmol/L)"
     )
     p.add_argument(
+        "--pump-connected",
+        type=int,
+        choices=[0, 1],
+        help="send KEY_PUMP_CONNECTED (0=offline, 1=connected); omit to not send it at all",
+    )
+    p.add_argument(
         "--screenshot", metavar="PATH", help="grab a screenshot after sending"
     )
     p.add_argument(
@@ -308,6 +315,8 @@ def main():
             kwargs[name] = value
 
     fields, blob = build_message(points, **kwargs)
+    if args.pump_connected is not None:
+        fields[KEY_PUMP_CONNECTED] = ("uint", args.pump_connected)
     print(
         "%s: %d points, %d-byte blob, BG %s"
         % (args.preset, len(points), len(blob), fields[KEY_BG_STRING][1])

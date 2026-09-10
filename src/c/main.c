@@ -126,6 +126,7 @@ static Layer *s_status_layer;
 static TextLayer *s_time_layer;
 static TextLayer *s_date_layer;
 static Layer *s_graph_layer; // axes, trace and projection all draw here
+static Layer *s_pump_layer;  // pump connection indicator: filled dot (connected) or cross (offline)
 static Layer *s_debug_layer; // draws the debug outlines below, nothing else
 
 // Debug outlines. Frames are registered rather than layers, so a TextLayer, a custom layer and a
@@ -141,6 +142,11 @@ static uint32_t s_bg_timestamp = 0; // 0 => never received
 
 static char s_iob_string[8] = "";     // raw IOB units from phone, e.g. "2.5"; empty = unknown
 static char s_status_string[20] = ""; // pump status, e.g. "SUSPENDED"; empty = normal
+
+// Pump link state (KEY_PUMP_CONNECTED). Offline is the correct default until the sender says
+// otherwise -- not "unknown" -- so the indicator is never hidden, and a relaunch starts offline
+// rather than carrying a stale "connected" from before.
+static bool s_pump_connected = false;
 
 // Graph data (all BG values in "mg/dL / 2" wire units).
 static uint32_t s_graph_ref_timestamp = 0;
@@ -275,6 +281,29 @@ static void update_iob_display(void) {
     }
     if (s_iob_layer)
         text_layer_set_text(s_iob_layer, s_iob_display);
+}
+
+// Filled circle when the pump link is up, an X when it's not. Never blank: offline is a real,
+// displayed state, not the absence of one -- see s_pump_connected's own comment.
+static void pump_layer_update_proc(Layer *layer, GContext *ctx) {
+    const GRect bounds = layer_get_bounds(layer);
+    const GPoint center = GPoint(bounds.size.w / 2, bounds.size.h / 2);
+    const int16_t r = 4;
+
+    graphics_context_set_stroke_color(ctx, COLOR_FG);
+    graphics_context_set_fill_color(ctx, COLOR_FG);
+    if (s_pump_connected) {
+        graphics_fill_circle(ctx, center, r);
+    } else {
+        graphics_context_set_stroke_width(ctx, 2);
+        graphics_draw_line(ctx, GPoint(center.x - r, center.y - r), GPoint(center.x + r, center.y + r));
+        graphics_draw_line(ctx, GPoint(center.x - r, center.y + r), GPoint(center.x + r, center.y - r));
+    }
+}
+
+static void update_pump_indicator(void) {
+    if (s_pump_layer)
+        layer_mark_dirty(s_pump_layer);
 }
 
 static void update_time_and_date(void) {
@@ -617,6 +646,12 @@ static void new_data_callback(DictionaryIterator *iter, void *context) {
         update_status_display();
     }
 
+    Tuple *pump_tuple = dict_find(iter, KEY_PUMP_CONNECTED);
+    if (pump_tuple) {
+        s_pump_connected = pump_tuple->value->uint8 != 0;
+        update_pump_indicator();
+    }
+
     Tuple *graph_tuple = dict_find(iter, KEY_GRAPH_DATA);
     if (graph_tuple && parse_graph_blob(graph_tuple->value->data, graph_tuple->length)) {
         if (s_graph_layer)
@@ -651,7 +686,7 @@ static void send_ready(void) {
         return;
     }
     dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
-    dict_write_uint32(iter, KEY_CAPABILITIES, CAP_BG | CAP_IOB | CAP_STATUS);
+    dict_write_uint32(iter, KEY_CAPABILITIES, CAP_BG | CAP_IOB | CAP_STATUS | CAP_PUMP_CONNECTED);
     dict_write_uint8(iter, KEY_GRAPH_HOURS, GRAPH_MAX_HOURS); // the most we can display; sender may send less
     if (app_message_outbox_send() != APP_MSG_OK) {
         APP_LOG(APP_LOG_LEVEL_ERROR, "outbox_send failed");
@@ -744,6 +779,21 @@ static void window_load(Window *window) {
         // add_debug_outline(GRect(x, y, w, h));
     }
 
+    // --- Pump connection indicator --------------------------------------------
+    // Left corner, directly under the "ago" (time-since-reading) label: both are link/staleness
+    // metadata, distinct from the BG value (centered) and IOB (right corner) they sit between.
+    // Below the ago row rather than beside it, so it never competes with ago's own text.
+    {
+        const int ago_iob_h = 28;  // must match the ago/iob layers' own h, above
+        const int w = 16;
+        const int h = 14;
+        const int x = PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_WIDTH / 10);
+        const int y = PBL_IF_RECT_ELSE(top_gap + edge_margin, PBL_DISPLAY_HEIGHT / 6) + ago_iob_h;
+        s_pump_layer = make_layer(root, GRect(x, y, w, h), pump_layer_update_proc);
+
+        // add_debug_outline(GRect(x, y, w, h));
+    }
+
     // --- Graph ---------------------------------------------------------------
     const int y_graph = (PBL_DISPLAY_HEIGHT - GRAPH_LAYER_H) / 2 - 11;
     {
@@ -791,6 +841,7 @@ static void window_load(Window *window) {
     update_ago_display();
     update_iob_display();
     update_status_display();
+    update_pump_indicator();
     update_time_and_date();
 }
 
@@ -802,6 +853,7 @@ static void window_unload(Window *window) {
     text_layer_destroy(s_time_layer);
     text_layer_destroy(s_date_layer);
     layer_destroy(s_graph_layer);
+    layer_destroy(s_pump_layer);
     layer_destroy(s_debug_layer);
 }
 
