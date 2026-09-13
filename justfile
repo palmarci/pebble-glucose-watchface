@@ -5,6 +5,23 @@ set default-list := true
 # so they render identically.
 platforms := "flint chalk emery gabbro"
 
+# Build for all target platforms, or one platform with `just build flint`
+build target="":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if [[ -z "{{target}}" ]]; then
+		pebble build
+		exit
+	fi
+	if ! git diff --quiet HEAD -- package.json; then
+		echo "package.json has uncommitted changes; refusing to modify it" >&2
+		exit 1
+	fi
+	trap 'status=$?; git restore --source=HEAD -- package.json; exit "$status"' EXIT
+	platform='{{target}}'
+	jq --arg platform "$platform" '.pebble.targetPlatforms = [$platform]' package.json | sponge package.json
+	pebble build
+
 # Build and launch in emulator (in X11 so just resize works)
 emu platform="flint":
 	pebble build
