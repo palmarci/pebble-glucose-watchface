@@ -289,6 +289,8 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
     }
 
     if (show_timer) {
+        if (hours > 99)
+            hours = 99;  // Guarantee max 2 digits
         snprintf(status_with_timer, sizeof(status_with_timer), "%s %lu:%02lu", s_status_string, hours, minutes);
     } else {
         snprintf(status_with_timer, sizeof(status_with_timer), "%s", s_status_string);
