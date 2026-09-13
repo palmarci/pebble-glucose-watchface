@@ -72,12 +72,14 @@
 #define PERSIST_BG_TIMESTAMP 2
 #define PERSIST_IOB_STRING 3
 #define PERSIST_STATUS_STRING 4
-#define PERSIST_GRAPH_REF 5
-#define PERSIST_GRAPH_COUNT 6
-#define PERSIST_GRAPH_OFFSETS 7
-#define PERSIST_GRAPH_VALUES 8
-#define PERSIST_GRAPH_HIGH 9
-#define PERSIST_GRAPH_LOW 10
+#define PERSIST_STATUS_START 5
+#define PERSIST_STATUS_END 6
+#define PERSIST_GRAPH_REF 7
+#define PERSIST_GRAPH_COUNT 8
+#define PERSIST_GRAPH_OFFSETS 9
+#define PERSIST_GRAPH_VALUES 10
+#define PERSIST_GRAPH_HIGH 11
+#define PERSIST_GRAPH_LOW 12
 
 // Status strip: a full-width opaque white band hugging the status text, sitting low over the graph so
 // its uppercase letters land ~2px above the time. Custom-drawn (not a TextLayer background) so the
@@ -109,6 +111,8 @@ static uint32_t s_bg_timestamp = 0; // 0 => never received
 
 static char s_iob_string[8] = "";     // raw IOB units from phone, e.g. "2.5"; empty = unknown
 static char s_status_string[20] = ""; // pump status, e.g. "SUSPENDED"; empty = normal
+static uint32_t s_status_start = 0;
+static uint32_t s_status_end = 0;
 
 // Graph data (all BG values in "mg/dL / 2" wire units).
 static uint32_t s_graph_ref_timestamp = 0;
@@ -254,10 +258,43 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
     if (s_status_string[0] == '\0') {
         return;
     }
+
     const int16_t w = layer_get_bounds(layer).size.w;
 
+    char status_with_timer[sizeof(s_status_string) + 6]; // " hh:mm" is 6 chars
+
+    bool show_timer = false;
+    uint32_t hours = 0;
+    uint32_t minutes = 0;
+
+    if (s_status_start != 0 && s_status_end == 0) {
+        // Display a count-up timer from the status start time
+        show_timer = true;
+        const uint32_t now = time(NULL);
+        if (now > s_status_start) {
+            const uint32_t seconds = now - s_status_start;
+            hours = seconds / 3600;
+            minutes = (seconds / 60) % 60;
+        }
+    } else if (s_status_end != 0 && s_status_start == 0) {
+        // Display a count-down timer to the status end time
+        show_timer = true;
+        const uint32_t now = time(NULL);
+        if (s_status_end > now) {
+            const uint32_t seconds = s_status_end - now;
+            hours = seconds / 3600;
+            minutes = (seconds / 60) % 60;
+        }
+    }
+
+    if (show_timer) {
+        snprintf(status_with_timer, sizeof(status_with_timer), "%s %lu:%02lu", s_status_string, hours, minutes);
+    } else {
+        snprintf(status_with_timer, sizeof(status_with_timer), "%s", s_status_string);
+    }
+
     graphics_context_set_text_color(ctx, GColorBlack);
-    graphics_draw_text(ctx, s_status_string, fonts_get_system_font(STATUS_FONT), GRect(0, 0, w, STATUS_H),
+    graphics_draw_text(ctx, status_with_timer, fonts_get_system_font(STATUS_FONT), GRect(0, 0, w, STATUS_H),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
@@ -460,8 +497,13 @@ static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     // blanks the BG/IOB once they cross STALE_MINUTES.
     update_bg_display();
     update_iob_display();
+
+    if (s_status_layer && (s_status_start != 0 || s_status_end != 0))
+        layer_mark_dirty(s_status_layer);
+
     // Redraw the graph too: point x-positions are computed from the current time, so without this the
     // trace freezes between the 5-min pushes (doesn't creep left, old points don't fall off the edge).
+    // TODO: Consider if this is worth it, probably eats some battery
     if (s_graph_layer)
         layer_mark_dirty(s_graph_layer); // trace scrolls and the projection goes stale together
 }
@@ -473,6 +515,8 @@ static void save_state(void) {
     persist_write_int(PERSIST_BG_TIMESTAMP, (int32_t)s_bg_timestamp);
     persist_write_string(PERSIST_IOB_STRING, s_iob_string);
     persist_write_string(PERSIST_STATUS_STRING, s_status_string);
+    persist_write_int(PERSIST_STATUS_START, (uint32_t)s_status_start);
+    persist_write_int(PERSIST_STATUS_END, (uint32_t)s_status_end);
     persist_write_int(PERSIST_GRAPH_REF, (int32_t)s_graph_ref_timestamp);
     persist_write_int(PERSIST_GRAPH_HIGH, s_graph_high_line);
     persist_write_int(PERSIST_GRAPH_LOW, s_graph_low_line);
@@ -496,6 +540,10 @@ static void load_state(void) {
         persist_read_string(PERSIST_IOB_STRING, s_iob_string, sizeof(s_iob_string));
     if (persist_exists(PERSIST_STATUS_STRING))
         persist_read_string(PERSIST_STATUS_STRING, s_status_string, sizeof(s_status_string));
+    if (persist_exists(PERSIST_STATUS_START))
+        s_status_start = (uint32_t)persist_read_int(PERSIST_STATUS_START);
+    if (persist_exists(PERSIST_STATUS_END))
+        s_status_end = (uint32_t)persist_read_int(PERSIST_STATUS_END);
     if (persist_exists(PERSIST_GRAPH_HIGH))
         s_graph_high_line = (uint8_t)persist_read_int(PERSIST_GRAPH_HIGH);
     if (persist_exists(PERSIST_GRAPH_LOW))
@@ -540,7 +588,10 @@ static bool parse_graph_blob(const uint8_t *d, uint16_t len) {
     return true;
 }
 
-static void new_data_callback(DictionaryIterator *iter, void *context) {
+// Handle a new dictionary of AppMessage keys and values.
+static void handle_dictionary(DictionaryIterator *iter, void *context) {
+
+    // BG and timestamp
     Tuple *bg_tuple = dict_find(iter, KEY_BG_STRING);
     Tuple *ts_tuple = dict_find(iter, KEY_BG_TIMESTAMP);
     if (bg_tuple) {
@@ -552,18 +603,33 @@ static void new_data_callback(DictionaryIterator *iter, void *context) {
         s_bg_timestamp = time(NULL); // fall back to arrival time
     }
 
+    // IoB
     Tuple *iob_tuple = dict_find(iter, KEY_IOB_STRING);
     if (iob_tuple) {
         STRCPY(s_iob_string, iob_tuple->value->cstring);
         update_iob_display();
     }
 
+    // Pump status
     Tuple *status_tuple = dict_find(iter, KEY_STATUS_STRING);
     if (status_tuple) {
         STRCPY(s_status_string, status_tuple->value->cstring);
+
+        Tuple *status_start_tuple = dict_find(iter, KEY_STATUS_START);
+        s_status_start = 0;
+        if (status_start_tuple) {
+            s_status_start = status_start_tuple->value->uint32;
+        }
+        Tuple *status_end_tuple = dict_find(iter, KEY_STATUS_END);
+        s_status_end = 0;
+        if (status_end_tuple) {
+            s_status_end = status_end_tuple->value->uint32;
+        }
+
         update_status_display();
     }
 
+    // Graph data
     Tuple *graph_tuple = dict_find(iter, KEY_GRAPH_DATA);
     if (graph_tuple && parse_graph_blob(graph_tuple->value->data, graph_tuple->length)) {
         if (s_graph_layer)
@@ -776,7 +842,7 @@ static void window_unload(Window *window) {
 
 static void init(void) {
     load_state(); // restore last reading + graph so a relaunch renders immediately, not empty
-    app_message_register_inbox_received(new_data_callback);
+    app_message_register_inbox_received(handle_dictionary);
     app_message_register_inbox_dropped(inbox_dropped_callback);
     app_message_open(2048, 64); // inbox large enough for the graph byte array (up to 24 h of points)
 

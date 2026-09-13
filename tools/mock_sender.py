@@ -51,12 +51,13 @@ def sdk_platforms():
     return out
 
 
-
 # Protocol keys (keep in sync with src/c/protocol.h).
 KEY_BG_TIMESTAMP = 10
 KEY_BG_STRING = 11
 KEY_IOB_STRING = 14
 KEY_STATUS_STRING = 15
+KEY_STATUS_START = 17
+KEY_STATUS_END = 18
 KEY_GRAPH_DATA = 30
 KEY_GRAPH_HIGH_LINE = 31
 KEY_GRAPH_LOW_LINE = 32
@@ -64,7 +65,6 @@ KEY_GRAPH_LOW_LINE = 32
 # Wire values are mg/dL / 2, so one wire unit is 2 mg/dL. Presets are authored in mmol/L because
 # that's what the watch displays and what a reading looks like to a human.
 MGDL_PER_MMOL = 18.018
-
 
 
 def mmol_to_wire(mmol):
@@ -108,7 +108,6 @@ def curve(keyframes, ts, window=120):
     return out
 
 
-
 # The day both showcase presets sample, as (minutes, mmol) keyframes: 5.4 up to 7.9, back down to a
 # wandering 5.7-6.0 stretch, a rise to a 8.2 peak, then a slow fall. showcase shows the first two
 # hours of it, showcase-full the two hours from 30 min in.
@@ -149,7 +148,11 @@ PRESETS = {
         # shows.
         lambda: (
             curve(SHOWCASE_DAY, list(range(33, 144, 5)), window=150),
-            {"iob": "1.4", "status": "SUSPENDED"},
+            {
+                "iob": "1.4",
+                "status": "SUSPENDED",
+                "status_start": int(time.time() - 5 * 60),  # 5 min ago
+            },
         ),
     ),
     "crowded": (
@@ -162,7 +165,11 @@ PRESETS = {
                 [(0, 7.2), (60, 8.4), (150, 11.2)],
                 list(range(0, 111, 5)),
             ),
-            {"iob": "2.1", "status": "SUSPENDED"},
+            {
+                "iob": "2.1",
+                "status": "TEMP TARGET",
+                "status_end": int(time.time()) + 60 * 60,  # 1 hour ahead
+            },
         ),
     ),
 }
@@ -173,7 +180,17 @@ def app_uuid():
         return json.load(f)["pebble"]["uuid"]
 
 
-def build_message(points, bg=None, iob="2.5", status="", high=90, low=36, now=None):
+def build_message(
+    points,
+    bg=None,
+    iob="2.5",
+    status="",
+    status_start=0,
+    status_end=0,
+    high=90,
+    low=36,
+    now=None,
+):
     """Turn preset output into the AppMessage fields. Returns (fields, blob).
 
     Timestamps are relative to now, so nothing is stale unless a preset means it to be.
@@ -200,9 +217,12 @@ def build_message(points, bg=None, iob="2.5", status="", high=90, low=36, now=No
         KEY_BG_STRING: ("string", bg if bg is not None else default_bg),
         KEY_IOB_STRING: ("string", iob),
         KEY_STATUS_STRING: ("string", status),
+        KEY_STATUS_START: ("uint", status_start),
+        KEY_STATUS_END: ("uint", status_end),
         KEY_GRAPH_HIGH_LINE: ("uint", high),
         KEY_GRAPH_LOW_LINE: ("uint", low),
     }
+
     return fields, pack_graph(ref_ts, wire_points)
 
 
