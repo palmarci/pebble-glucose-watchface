@@ -287,6 +287,11 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
         }
     }
 
+    // Exception: I don't want to show the timer for "SUSPENDED"
+    if (strcmp(s_status_string, "SUSPENDED") == 0) {
+        show_timer = false;
+    }
+
     if (show_timer) {
         snprintf(status_with_timer, sizeof(status_with_timer), "%s %lu:%02lu", s_status_string, hours, minutes);
     } else {
