@@ -154,7 +154,7 @@ static void draw_layer_outline(GContext *ctx, GRect bounds) {
     }
 }
 
-static void add_debug_outline(GRect frame) {
+[[maybe_unused]] static void add_debug_outline(GRect frame) {
     if (s_num_debug_outlines < DEBUG_MAX_OUTLINES) {
         s_debug_outlines[s_num_debug_outlines++] = frame;
     }
