@@ -15,6 +15,7 @@
 #define GRAPH_HOURS 2  // Hours of graph data
 #define STROKE_WIDTH 3 // Graph stroke width in pixels
 #define STROKE_OFFSET (STROKE_WIDTH / 2)
+#define MAX_GRAPH_POINTS 300 // Enough for 24 h @ 5 min + headroom
 
 // --- Messy stuff, to be cleaned up ---
 
@@ -24,12 +25,8 @@
 // and the phone status-bar icon go stale at the same time.
 #define STALE_MINUTES 15
 
-// Graph config. We ask the phone for (and buffer) up to GRAPH_MAX_HOURS of history, but the visible
-// window is fixed to GRAPH_HOURS (below); the extra buffered history is kept for future use.
-#define GRAPH_MAX_HOURS 24   // history requested from / buffered for the phone; announced as our capability
-#define MAX_GRAPH_POINTS 300 // 24 h @ 5 min = 288, + headroom
 // persist_write_data caps at 256 B/key (uint16 offsets -> 128 points); a larger graph isn't
-// persisted — the phone's ready-ping resend refills it.
+// persisted — the senders's ready-ping resend refills it.
 #define PERSIST_MAX_POINTS 128
 // Fixed y-axis 2.2–16 mmol/L, in "mg/dL / 2" wire units (40..288 mg/dL). Out-of-range clamps to edge.
 #define GRAPH_VALUE_MIN 20
@@ -37,11 +34,10 @@
 // Don't connect points more than this far apart (a sensor gap draws as a break, not a straight line).
 #define GRAPH_GAP_THRESHOLD_MINUTES 15
 
-// Issue #1: the graph area is fixed to the last 2 h (regardless of the phone's KEY_GRAPH_HOURS) and
-// occupies the left 2/3 of the screen; the right 1/3 shows the extrapolated trend projection (see below).
-
-#define GRAPH_WIDTH_NUM 2 // graph width = screen width * NUM/DEN; the rest is the projection region
+// The graph occupies the left 2/3 of the screen; the right 1/3 shows the extrapolated trend projection
+#define GRAPH_WIDTH_NUM 2 // graph width = screen width * NUM/DEN; the rest is for trend projection
 #define GRAPH_WIDTH_DEN 3
+
 // The value band: BG values map into these GRAPH_BAND_H pixels, starting at this screen y.
 #define GRAPH_BAND_TOP_Y 38
 #define GRAPH_BAND_H 64
@@ -662,7 +658,7 @@ static void inbox_dropped_callback(AppMessageResult reason, void *context) {
 
 // Announce which data we want. Also nudges the phone to push the latest reading,
 // so a freshly launched watchface fills in without waiting for the next poll.
-static void send_ready(void) {
+static void send_capability_announcement(void) {
     DictionaryIterator *iter;
     if (app_message_outbox_begin(&iter) != APP_MSG_OK) {
         APP_LOG(APP_LOG_LEVEL_ERROR, "outbox_begin failed");
@@ -670,7 +666,7 @@ static void send_ready(void) {
     }
     dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
     dict_write_uint32(iter, KEY_CAPABILITIES, CAP_BG | CAP_IOB | CAP_STATUS);
-    dict_write_uint8(iter, KEY_GRAPH_HOURS, GRAPH_MAX_HOURS); // the most we can display; sender may send less
+    dict_write_uint8(iter, KEY_GRAPH_HOURS, GRAPH_HOURS);
     if (app_message_outbox_send() != APP_MSG_OK) {
         APP_LOG(APP_LOG_LEVEL_ERROR, "outbox_send failed");
     }
@@ -678,7 +674,7 @@ static void send_ready(void) {
 
 static void bluetooth_callback(bool connected) {
     if (connected) {
-        send_ready();
+        send_capability_announcement();
     }
 }
 
@@ -858,7 +854,7 @@ static void init(void) {
     window_set_window_handlers(s_window, (WindowHandlers){.load = window_load, .unload = window_unload});
     window_stack_push(s_window, true);
 
-    send_ready();
+    send_capability_announcement();
 }
 
 static void deinit(void) {
