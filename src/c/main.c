@@ -114,7 +114,7 @@ static Layer *s_status_layer;
 static TextLayer *s_time_layer;
 static TextLayer *s_date_layer;
 static Layer *s_graph_layer; // axes, trace and projection all draw here
-static Layer *s_pump_layer;  // pump connection indicator: filled dot (connected) or cross (offline)
+static Layer *s_pump_layer;  // pump connection indicator: cross while offline, blank while connected
 static Layer *s_debug_layer; // draws the debug outlines below, nothing else
 
 // Debug outlines. Frames are registered rather than layers, so a TextLayer, a custom layer and a
@@ -134,8 +134,8 @@ static uint32_t s_status_start = 0;
 static uint32_t s_status_end = 0;
 
 // Pump link state (KEY_PUMP_CONNECTED). Offline is the correct default until the sender says
-// otherwise -- not "unknown" -- so the indicator is never hidden, and a relaunch starts offline
-// rather than carrying a stale "connected" from before.
+// otherwise -- not "unknown" -- so a relaunch shows the cross rather than carrying a stale
+// "connected" from before.
 static bool s_pump_connected = false;
 
 // Graph data (all BG values in "mg/dL / 2" wire units).
@@ -275,22 +275,21 @@ static void update_iob_display(void) {
         text_layer_set_text(s_iob_layer, s_iob_display);
 }
 
-// Filled circle when the pump link is up, an X when it's not. Never blank: offline is a real,
-// displayed state, not the absence of one -- see s_pump_connected's own comment.
+// An X while the pump link is down, nothing while it's up: connected is the normal state, and a
+// "connected" dot was hard to tell from the X at a glance. The link can be up while no CGM readings
+// arrive (sensor warm-up, sensor-pump dropout), so the X is what separates that from a pump outage.
 static void pump_layer_update_proc(Layer *layer, GContext *ctx) {
+    if (s_pump_connected) {
+        return;
+    }
     const GRect bounds = layer_get_bounds(layer);
     const GPoint center = GPoint(bounds.size.w / 2, bounds.size.h / 2);
     const int16_t r = 4;
 
     graphics_context_set_stroke_color(ctx, COLOR_FG);
-    graphics_context_set_fill_color(ctx, COLOR_FG);
-    if (s_pump_connected) {
-        graphics_fill_circle(ctx, center, r);
-    } else {
-        graphics_context_set_stroke_width(ctx, 2);
-        graphics_draw_line(ctx, GPoint(center.x - r, center.y - r), GPoint(center.x + r, center.y + r));
-        graphics_draw_line(ctx, GPoint(center.x - r, center.y + r), GPoint(center.x + r, center.y - r));
-    }
+    graphics_context_set_stroke_width(ctx, 2);
+    graphics_draw_line(ctx, GPoint(center.x - r, center.y - r), GPoint(center.x + r, center.y + r));
+    graphics_draw_line(ctx, GPoint(center.x - r, center.y + r), GPoint(center.x + r, center.y - r));
 }
 
 static void update_pump_indicator(void) {
