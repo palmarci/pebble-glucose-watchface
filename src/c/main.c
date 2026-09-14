@@ -20,6 +20,7 @@
 #define COLOR_BG_LOW    GColorFolly    // below the low line
 #define COLOR_BG_OK     GColorGreen    // within range
 #define COLOR_BG_HIGH   GColorYellow   // above the high line
+#define COLOR_PUMP_OFFLINE GColorRed   // the pump-offline cross
 
 // Graph config
 #define GRAPH_HOURS 2  // Hours of graph data
@@ -284,7 +285,8 @@ static void pump_layer_update_proc(Layer *layer, GContext *ctx) {
     const GPoint center = GPoint(bounds.size.w / 2, bounds.size.h / 2);
     const int16_t r = 4;
 
-    graphics_context_set_stroke_color(ctx, COLOR_FG);
+    // Red would render black on B&W platforms, invisible on the black background.
+    graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(COLOR_PUMP_OFFLINE, COLOR_FG));
     graphics_context_set_stroke_width(ctx, 2);
     graphics_draw_line(ctx, GPoint(center.x - r, center.y - r), GPoint(center.x + r, center.y + r));
     graphics_draw_line(ctx, GPoint(center.x - r, center.y + r), GPoint(center.x + r, center.y - r));
