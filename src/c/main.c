@@ -23,13 +23,7 @@
 #define GRAPH_HOURS 2  // Hours of graph data
 #define STROKE_WIDTH 3 // Graph stroke width in pixels
 #define STROKE_OFFSET (STROKE_WIDTH / 2)
-
-// String formatting
-#define STR_IOB_FMT "%sU"       // insulin on board, e.g. "2.5U"
-#define STR_AGO_MIN_FMT "%dm"   // age of the current BG value, in minutes, e.g. "5m"
-#define STR_AGO_HOURS_FMT "%dh" // age of the current BG value, >= 1 hour
-#define STR_TIME_24H_FMT "%H:%M"
-#define STR_TIME_12H_FMT "%I:%M"
+#define MAX_GRAPH_POINTS 300 // Enough for 24 h @ 5 min + headroom
 
 // --- Messy stuff, to be cleaned up ---
 
@@ -38,16 +32,9 @@
 // MUST match the bridge's STALE_SECONDS (minimed-pebble-bridge BridgeForegroundService) so the watch
 // and the phone status-bar icon go stale at the same time.
 #define STALE_MINUTES 15
-// Below this age a reading is "fresh" and the time-ago label is hidden (it's only useful as an
-// ageing/staleness hint once a reading has been missed).
-#define FRESH_MINUTES 6
 
-// Graph config. We ask the phone for (and buffer) up to GRAPH_MAX_HOURS of history, but the visible
-// window is fixed to GRAPH_HOURS (below); the extra buffered history is kept for future use.
-#define GRAPH_MAX_HOURS 24   // history requested from / buffered for the phone; announced as our capability
-#define MAX_GRAPH_POINTS 300 // 24 h @ 5 min = 288, + headroom
 // persist_write_data caps at 256 B/key (uint16 offsets -> 128 points); a larger graph isn't
-// persisted — the phone's ready-ping resend refills it.
+// persisted — the senders's ready-ping resend refills it.
 #define PERSIST_MAX_POINTS 128
 // Fixed y-axis 2.2–16 mmol/L, in "mg/dL / 2" wire units (40..288 mg/dL). Out-of-range clamps to edge.
 #define GRAPH_VALUE_MIN 20
@@ -55,11 +42,10 @@
 // Don't connect points more than this far apart (a sensor gap draws as a break, not a straight line).
 #define GRAPH_GAP_THRESHOLD_MINUTES 15
 
-// Issue #1: the graph area is fixed to the last 2 h (regardless of the phone's KEY_GRAPH_HOURS). It
-// occupies most of the screen width; the small right region holds the extrapolated trend projection.
-
-#define GRAPH_WIDTH_NUM 7 // graph width = screen width * NUM/DEN; the rest is the projection region
+// The graph occupies most of the screen width; the small right region shows the extrapolated trend projection
+#define GRAPH_WIDTH_NUM 7 // graph width = screen width * NUM/DEN; the rest is for trend projection
 #define GRAPH_WIDTH_DEN 8
+
 // The value band: BG values map into these GRAPH_BAND_H pixels, starting at this screen y.
 #define GRAPH_BAND_TOP_Y 38
 #define GRAPH_BAND_H 92
@@ -101,12 +87,14 @@
 #define PERSIST_BG_TIMESTAMP 2
 #define PERSIST_IOB_STRING 3
 #define PERSIST_STATUS_STRING 4
-#define PERSIST_GRAPH_REF 5
-#define PERSIST_GRAPH_COUNT 6
-#define PERSIST_GRAPH_OFFSETS 7
-#define PERSIST_GRAPH_VALUES 8
-#define PERSIST_GRAPH_HIGH 9
-#define PERSIST_GRAPH_LOW 10
+#define PERSIST_STATUS_START 5
+#define PERSIST_STATUS_END 6
+#define PERSIST_GRAPH_REF 7
+#define PERSIST_GRAPH_COUNT 8
+#define PERSIST_GRAPH_OFFSETS 9
+#define PERSIST_GRAPH_VALUES 10
+#define PERSIST_GRAPH_HIGH 11
+#define PERSIST_GRAPH_LOW 12
 
 // Status strip: a full-width opaque white band hugging the status text, sitting low over the graph so
 // its uppercase letters land ~2px above the time. Custom-drawn (not a TextLayer background) so the
@@ -142,6 +130,8 @@ static uint32_t s_bg_timestamp = 0; // 0 => never received
 
 static char s_iob_string[8] = "";     // raw IOB units from phone, e.g. "2.5"; empty = unknown
 static char s_status_string[20] = ""; // pump status, e.g. "SUSPENDED"; empty = normal
+static uint32_t s_status_start = 0;
+static uint32_t s_status_end = 0;
 
 // Pump link state (KEY_PUMP_CONNECTED). Offline is the correct default until the sender says
 // otherwise -- not "unknown" -- so the indicator is never hidden, and a relaunch starts offline
@@ -159,7 +149,7 @@ static uint8_t s_graph_low_line = 36;               // 4.0 mmol/L
 static char s_ago_display[16];
 static char s_iob_display[12];
 static char s_time_display[8];
-static char s_date_display[16];
+static char s_date_display[24]; // longest: "Wednesday, 17   W38"
 
 static void safe_strncpy(char *dst, const char *src, size_t dst_size) {
     if (dst_size > 0) {
@@ -196,7 +186,7 @@ static void draw_layer_outline(GContext *ctx, GRect bounds) {
 // over the whole window, on top of everything, and outlines the frames switched on in
 // s_debug_outlines. Frames are parent-relative and this layer spans the root, so they need no
 // translation.
-static void add_debug_outline(GRect frame) {
+[[maybe_unused]] static void add_debug_outline(GRect frame) {
     if (s_num_debug_outlines < DEBUG_MAX_OUTLINES) {
         s_debug_outlines[s_num_debug_outlines++] = frame;
     }
@@ -257,28 +247,30 @@ static void update_bg_display(void) {
 }
 
 static void update_ago_display(void) {
-    // How old the current BG value is (in minutes). Hidden while fresh; shown only once a reading has
-    // been missed, so it reads as a staleness hint rather than constant clutter.
     int mins = minutes_ago();
-    if (mins < FRESH_MINUTES) {
+
+    if (mins < 6) {
+        // Hide when fresh
         s_ago_display[0] = '\0';
     } else if (mins < 60) {
-        snprintf(s_ago_display, sizeof(s_ago_display), STR_AGO_MIN_FMT, mins);
+        // Minutes ago
+        snprintf(s_ago_display, sizeof(s_ago_display), "%dm", mins);
     } else {
-        snprintf(s_ago_display, sizeof(s_ago_display), STR_AGO_HOURS_FMT, mins / 60);
+        // Hours ago
+        snprintf(s_ago_display, sizeof(s_ago_display), "%dh", mins / 60);
     }
+
     if (s_ago_layer)
         text_layer_set_text(s_ago_layer, s_ago_display);
 }
 
 static void update_iob_display(void) {
     if (s_iob_string[0] == '\0' || is_stale()) {
-        // Blank when stale for the same reason as BG: a frozen IOB is misleading (it decays to ~0 over
-        // an outage), so don't keep showing the last value.
         s_iob_display[0] = '\0';
     } else {
-        snprintf(s_iob_display, sizeof(s_iob_display), STR_IOB_FMT, s_iob_string);
+        snprintf(s_iob_display, sizeof(s_iob_display), "%sU", s_iob_string);
     }
+
     if (s_iob_layer)
         text_layer_set_text(s_iob_layer, s_iob_display);
 }
@@ -306,11 +298,33 @@ static void update_pump_indicator(void) {
         layer_mark_dirty(s_pump_layer);
 }
 
+// Full weekday plus week number overflows narrow screens on long names ("Wednesday, 16   W38" at 144 px).
+static bool date_fits(void) {
+    const GSize size =
+        graphics_text_layout_get_content_size(s_date_display, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                                              GRect(0, 0, 2 * PBL_DISPLAY_WIDTH, 30), GTextOverflowModeFill,
+                                              GTextAlignmentLeft);
+    return size.w <= PBL_DISPLAY_WIDTH;
+}
+
 static void update_time_and_date(void) {
     time_t now = time(NULL);
-    struct tm *t = localtime(&now);
-    strftime(s_time_display, sizeof(s_time_display), clock_is_24h_style() ? STR_TIME_24H_FMT : STR_TIME_12H_FMT, t);
-    strftime(s_date_display, sizeof(s_date_display), "%A, %d", t);
+    struct tm *time = localtime(&now);
+
+    strftime(s_time_display, sizeof(s_time_display), clock_is_24h_style() ? "%H:%M" : "%I:%M", time);
+
+    if (time->tm_mday < 10) {
+        // %e = " 9" with a space or "10"
+        strftime(s_date_display, sizeof(s_date_display), "%A,%e   W%V", time);
+        if (!date_fits())
+            strftime(s_date_display, sizeof(s_date_display), "%a%e   W%V", time);
+    } else {
+        // %d = "09" with a zero, or "10"
+        strftime(s_date_display, sizeof(s_date_display), "%A, %d   W%V", time);
+        if (!date_fits())
+            strftime(s_date_display, sizeof(s_date_display), "%a %d   W%V", time);
+    }
+
     // Guarded for the same reason as the BG/ago/IOB layers: the tick is subscribed before
     // window_load creates the layers, so a tick landing in the launch gap would hit
     // text_layer_set_text(NULL,..) and hard-fault. window_load re-renders, so nothing is lost.
@@ -333,10 +347,50 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
     if (s_status_string[0] == '\0') {
         return;
     }
+
     const int16_t w = layer_get_bounds(layer).size.w;
 
+    char status_with_timer[sizeof(s_status_string) + 6]; // " hh:mm" is 6 chars
+
+    bool show_timer = false;
+    uint32_t hours = 0;
+    uint32_t minutes = 0;
+
+    if (s_status_start != 0 && s_status_end == 0) {
+        // Display a count-up timer from the status start time
+        show_timer = true;
+        const uint32_t now = time(NULL);
+        if (now > s_status_start) {
+            const uint32_t seconds = now - s_status_start;
+            hours = seconds / 3600;
+            minutes = (seconds / 60) % 60;
+        }
+    } else if (s_status_end != 0 && s_status_start == 0) {
+        // Display a count-down timer to the status end time
+        show_timer = true;
+        const uint32_t now = time(NULL);
+        if (s_status_end > now) {
+            const uint32_t seconds = s_status_end - now;
+            hours = seconds / 3600;
+            minutes = (seconds / 60) % 60;
+        }
+    }
+
+    // Exception: I don't want to show the timer for "SUSPENDED"
+    if (strcmp(s_status_string, "SUSPENDED") == 0) {
+        show_timer = false;
+    }
+
+    if (show_timer) {
+        if (hours > 99)
+            hours = 99;  // Guarantee max 2 digits
+        snprintf(status_with_timer, sizeof(status_with_timer), "%s %lu:%02lu", s_status_string, hours, minutes);
+    } else {
+        snprintf(status_with_timer, sizeof(status_with_timer), "%s", s_status_string);
+    }
+
     graphics_context_set_text_color(ctx, COLOR_FG);
-    graphics_draw_text(ctx, s_status_string, fonts_get_system_font(STATUS_FONT), GRect(0, 0, w, STATUS_H),
+    graphics_draw_text(ctx, status_with_timer, fonts_get_system_font(STATUS_FONT), GRect(0, 0, w, STATUS_H),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
@@ -542,8 +596,13 @@ static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     // blanks the BG/IOB once they cross STALE_MINUTES.
     update_bg_display();
     update_iob_display();
+
+    if (s_status_layer && (s_status_start != 0 || s_status_end != 0))
+        layer_mark_dirty(s_status_layer);
+
     // Redraw the graph too: point x-positions are computed from the current time, so without this the
     // trace freezes between the 5-min pushes (doesn't creep left, old points don't fall off the edge).
+    // TODO: Consider if this is worth it, probably eats some battery
     if (s_graph_layer)
         layer_mark_dirty(s_graph_layer); // trace scrolls and the projection goes stale together
 }
@@ -555,6 +614,8 @@ static void save_state(void) {
     persist_write_int(PERSIST_BG_TIMESTAMP, (int32_t)s_bg_timestamp);
     persist_write_string(PERSIST_IOB_STRING, s_iob_string);
     persist_write_string(PERSIST_STATUS_STRING, s_status_string);
+    persist_write_int(PERSIST_STATUS_START, (uint32_t)s_status_start);
+    persist_write_int(PERSIST_STATUS_END, (uint32_t)s_status_end);
     persist_write_int(PERSIST_GRAPH_REF, (int32_t)s_graph_ref_timestamp);
     persist_write_int(PERSIST_GRAPH_HIGH, s_graph_high_line);
     persist_write_int(PERSIST_GRAPH_LOW, s_graph_low_line);
@@ -578,6 +639,10 @@ static void load_state(void) {
         persist_read_string(PERSIST_IOB_STRING, s_iob_string, sizeof(s_iob_string));
     if (persist_exists(PERSIST_STATUS_STRING))
         persist_read_string(PERSIST_STATUS_STRING, s_status_string, sizeof(s_status_string));
+    if (persist_exists(PERSIST_STATUS_START))
+        s_status_start = (uint32_t)persist_read_int(PERSIST_STATUS_START);
+    if (persist_exists(PERSIST_STATUS_END))
+        s_status_end = (uint32_t)persist_read_int(PERSIST_STATUS_END);
     if (persist_exists(PERSIST_GRAPH_HIGH))
         s_graph_high_line = (uint8_t)persist_read_int(PERSIST_GRAPH_HIGH);
     if (persist_exists(PERSIST_GRAPH_LOW))
@@ -622,7 +687,10 @@ static bool parse_graph_blob(const uint8_t *d, uint16_t len) {
     return true;
 }
 
-static void new_data_callback(DictionaryIterator *iter, void *context) {
+// Handle a new dictionary of AppMessage keys and values.
+static void handle_dictionary(DictionaryIterator *iter, void *context) {
+
+    // BG and timestamp
     Tuple *bg_tuple = dict_find(iter, KEY_BG_STRING);
     Tuple *ts_tuple = dict_find(iter, KEY_BG_TIMESTAMP);
     if (bg_tuple) {
@@ -634,24 +702,40 @@ static void new_data_callback(DictionaryIterator *iter, void *context) {
         s_bg_timestamp = time(NULL); // fall back to arrival time
     }
 
+    // IoB
     Tuple *iob_tuple = dict_find(iter, KEY_IOB_STRING);
     if (iob_tuple) {
         STRCPY(s_iob_string, iob_tuple->value->cstring);
         update_iob_display();
     }
 
+    // Pump status
     Tuple *status_tuple = dict_find(iter, KEY_STATUS_STRING);
     if (status_tuple) {
         STRCPY(s_status_string, status_tuple->value->cstring);
+
+        Tuple *status_start_tuple = dict_find(iter, KEY_STATUS_START);
+        s_status_start = 0;
+        if (status_start_tuple) {
+            s_status_start = status_start_tuple->value->uint32;
+        }
+        Tuple *status_end_tuple = dict_find(iter, KEY_STATUS_END);
+        s_status_end = 0;
+        if (status_end_tuple) {
+            s_status_end = status_end_tuple->value->uint32;
+        }
+
         update_status_display();
     }
 
+    // Pump connection
     Tuple *pump_tuple = dict_find(iter, KEY_PUMP_CONNECTED);
     if (pump_tuple) {
         s_pump_connected = pump_tuple->value->uint8 != 0;
         update_pump_indicator();
     }
 
+    // Graph data
     Tuple *graph_tuple = dict_find(iter, KEY_GRAPH_DATA);
     if (graph_tuple && parse_graph_blob(graph_tuple->value->data, graph_tuple->length)) {
         if (s_graph_layer)
@@ -679,7 +763,7 @@ static void inbox_dropped_callback(AppMessageResult reason, void *context) {
 
 // Announce which data we want. Also nudges the phone to push the latest reading,
 // so a freshly launched watchface fills in without waiting for the next poll.
-static void send_ready(void) {
+static void send_capability_announcement(void) {
     DictionaryIterator *iter;
     if (app_message_outbox_begin(&iter) != APP_MSG_OK) {
         APP_LOG(APP_LOG_LEVEL_ERROR, "outbox_begin failed");
@@ -687,7 +771,7 @@ static void send_ready(void) {
     }
     dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
     dict_write_uint32(iter, KEY_CAPABILITIES, CAP_BG | CAP_IOB | CAP_STATUS | CAP_PUMP_CONNECTED);
-    dict_write_uint8(iter, KEY_GRAPH_HOURS, GRAPH_MAX_HOURS); // the most we can display; sender may send less
+    dict_write_uint8(iter, KEY_GRAPH_HOURS, GRAPH_HOURS);
     if (app_message_outbox_send() != APP_MSG_OK) {
         APP_LOG(APP_LOG_LEVEL_ERROR, "outbox_send failed");
     }
@@ -695,7 +779,7 @@ static void send_ready(void) {
 
 static void bluetooth_callback(bool connected) {
     if (connected) {
-        send_ready();
+        send_capability_announcement();
     }
 }
 
@@ -859,7 +943,7 @@ static void window_unload(Window *window) {
 
 static void init(void) {
     load_state(); // restore last reading + graph so a relaunch renders immediately, not empty
-    app_message_register_inbox_received(new_data_callback);
+    app_message_register_inbox_received(handle_dictionary);
     app_message_register_inbox_dropped(inbox_dropped_callback);
     app_message_open(2048, 64); // inbox large enough for the graph byte array (up to 24 h of points)
 
@@ -870,7 +954,7 @@ static void init(void) {
     window_set_window_handlers(s_window, (WindowHandlers){.load = window_load, .unload = window_unload});
     window_stack_push(s_window, true);
 
-    send_ready();
+    send_capability_announcement();
 }
 
 static void deinit(void) {

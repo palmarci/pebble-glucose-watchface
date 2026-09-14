@@ -1,13 +1,10 @@
 // Pebble Glucose Protocol
 //
-// Copy this file into your watchface/sender project.
-// Port to other languages as needed.
-//
-// See PROTOCOL.md for all definitions.
+// Generated from PROTOCOL.md. Do not edit directly.
 
 #pragma once
 
-#define PROTOCOL_VERSION 1 // draft!
+#define PROTOCOL_VERSION 1
 
 // Message keys: Watchface -> sender (capability announcement)
 #define KEY_PROTOCOL_VERSION 0
@@ -23,8 +20,10 @@
 #define KEY_IOB_STRING 14
 #define KEY_STATUS_STRING 15
 #define KEY_SENDER_BATTERY 16
-#define KEY_PUMP_CONNECTED 17  // uint8, 0=offline 1=connected; offline is the default
-// Keys 18-29 reserved
+#define KEY_STATUS_START 17
+#define KEY_STATUS_END 18
+#define KEY_PUMP_CONNECTED 19  // uint8, 0=offline 1=connected; offline is the default
+// Keys 20-29 reserved
 
 // Message keys: Sender -> watchface (raw graph)
 #define KEY_GRAPH_DATA 30
@@ -35,13 +34,13 @@
 // Keys 40-49 reserved for bitmap graph
 
 // Capability bits
-#define CAP_BG (1 << 0)
-#define CAP_TREND_ARROW (1 << 1)
-#define CAP_DELTA (1 << 2)
-#define CAP_IOB (1 << 3)
-#define CAP_STATUS (1 << 4)
-#define CAP_SENDER_BATTERY (1 << 5)
-#define CAP_PUMP_CONNECTED (1 << 6)
+#define CAP_BG 0x01
+#define CAP_TREND_ARROW 0x02
+#define CAP_DELTA 0x04
+#define CAP_IOB 0x08
+#define CAP_STATUS 0x10
+#define CAP_SENDER_BATTERY 0x20
+#define CAP_PUMP_CONNECTED 0x40
 
 // Trend arrow indices
 #define TREND_UNKNOWN 0

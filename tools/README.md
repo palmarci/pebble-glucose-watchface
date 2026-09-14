@@ -3,7 +3,7 @@
 Sends mock Pebble Glucose Protocol messages to the watchface, so rendering can be iterated on
 without a phone, a pump, or a rebuild.
 
-It drives the real receive path — a genuine AppMessage dict through `new_data_callback` and
+It drives the real receive path — a genuine AppMessage dict through `handle_dictionary` and
 `parse_graph_blob` — via `pebble send-app-message`. Each invocation sends **one** message carrying
 a complete snapshot: the watchface replaces its whole graph every time, it never appends.
 
@@ -42,7 +42,7 @@ passes. Send once and leave it if that's what you want to look at.
 
 ## What it doesn't cover
 
-- The outbound capability announce (`send_ready`). Nothing here replies to it; a `src/pkjs`
+- The outbound capability announce (`send_capability_announcement`). Nothing here replies to it; a `src/pkjs`
   mock sender would be needed, and only works on the emulator.
 - Incremental graph updates. There is no such path in the watchface — `parse_graph_blob`
   overwrites `s_graph_count` and both arrays on every message.
