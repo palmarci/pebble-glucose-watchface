@@ -48,18 +48,13 @@
 #define GRAPH_WIDTH_NUM 7 // graph width = screen width * NUM/DEN; the rest is for trend projection
 #define GRAPH_WIDTH_DEN 8
 
-// The value band: BG values map into these GRAPH_BAND_H pixels, starting at this screen y.
-#define GRAPH_BAND_TOP_Y 38
-#define GRAPH_BAND_H 92
 // The layer is taller than the value band so a projection leaving a reading near the top or bottom of
 // the range has somewhere to go instead of being clipped away (its length is clamped to the layer, so
 // it shortens rather than vanishing). Asymmetric: more spare screen below the band than above it.
 #define GRAPH_PAD_TOP 6
 #define GRAPH_PAD_BOTTOM 8
-// Derived. Axes, trace and projection all live in this one layer, so there is a single coordinate space
-// and the projection pivot cannot drift off the trace. It sits behind the time/BG text, which stay on top.
-#define GRAPH_LAYER_TOP_Y (GRAPH_BAND_TOP_Y - GRAPH_PAD_TOP)
-#define GRAPH_LAYER_H (GRAPH_PAD_TOP + GRAPH_BAND_H + GRAPH_PAD_BOTTOM)
+// Axes, trace and projection all live in one layer, so there is a single coordinate space and the
+// projection pivot cannot drift off the trace. It sits behind the time/BG text, which stay on top.
 
 // Trend projection (issue #1). Extrapolated on-watch from recent BG, NOT read from the pump. Its angle is
 // the graph's own visual slope (same px/min and px/value as the trace), so it lies tangent to how the
@@ -103,8 +98,8 @@
 // band can be full width yet vertically tight to the caps. Layer-local coords, like every other layer
 // here; it paints only the band + text, leaving the rest transparent so the graph shows through.
 #define STATUS_FONT FONT_KEY_GOTHIC_18_BOLD
-#define STATUS_TOP_Y 92        // layer top (screen y), which is also the text box's top
 #define STATUS_H 24            // one line of STATUS_FONT, with room for descenders
+#define STATUS_CAP_H 11        // STATUS_FONT's cap height (measured)
 #define STATUS_BAND_OFFSET_Y 4 // band top within the layer; the font's top padding drops the caps into it
 #define STATUS_BAND_H 17       // band height (caps + a little room)
 
@@ -116,6 +111,7 @@ static Layer *s_status_layer;
 static TextLayer *s_time_layer;
 static TextLayer *s_date_layer;
 static Layer *s_graph_layer; // axes, trace and projection all draw here
+static int s_graph_band_h;   // px the BG value range maps onto; sized to the screen in window_load
 static Layer *s_pump_layer;  // pump connection indicator: cross while offline, blank while connected
 static Layer *s_debug_layer; // draws the debug outlines below, nothing else
 
@@ -394,7 +390,7 @@ static int graph_y(int bg) {
         bg = GRAPH_VALUE_MIN;
     if (bg > GRAPH_VALUE_MAX)
         bg = GRAPH_VALUE_MAX;
-    return GRAPH_PAD_TOP + GRAPH_BAND_H - ((bg - GRAPH_VALUE_MIN) * GRAPH_BAND_H) / (GRAPH_VALUE_MAX - GRAPH_VALUE_MIN);
+    return GRAPH_PAD_TOP + s_graph_band_h - ((bg - GRAPH_VALUE_MIN) * s_graph_band_h) / (GRAPH_VALUE_MAX - GRAPH_VALUE_MIN);
 }
 
 static void draw_graph_axes(GContext *ctx, GRect bounds) {
@@ -569,7 +565,7 @@ static void draw_projection(GContext *ctx, GRect bounds) {
     const int graph_minutes = GRAPH_HOURS * 60;
     const int newest_x = graph_w - (age_min * graph_w) / graph_minutes;
     const float px_per_min = (float)graph_w / graph_minutes;
-    const float px_per_wire = (float)GRAPH_BAND_H / (GRAPH_VALUE_MAX - GRAPH_VALUE_MIN);
+    const float px_per_wire = (float)s_graph_band_h / (GRAPH_VALUE_MAX - GRAPH_VALUE_MIN);
     const GPoint pivot = GPoint(newest_x, graph_y(s_graph_bg_values[s_graph_count - 1]));
     trend_draw_projection(ctx, bounds, pivot, slope, px_per_min, px_per_wire);
 }
@@ -824,9 +820,28 @@ static void window_load(Window *window) {
     const int top_gap = PBL_IF_RECT_ELSE(LAYOUT_TOP_GAP, 0);
     const int bottom_gap = PBL_IF_RECT_ELSE(LAYOUT_BOTTOM_GAP, 0);
 
+    const int caps_top_y = top_gap + edge_margin; // cap top of the BG value, the topmost text
+    const int date_y = PBL_DISPLAY_HEIGHT - bottom_gap - edge_margin - 30;
+    const int time_y = date_y + cap_offset(FONT_KEY_GOTHIC_24_BOLD) - internal_margin - 42;
+    const int time_caps_y = time_y + cap_offset(FONT_TIME);
+
+    // --- Graph ---------------------------------------------------------------
+    // Created first so all text draws over it. The value band runs from the top row's cap top to just
+    // above the time: the rarely used high end sits behind the BG/IOB row rather than as an empty gap
+    // under it, and the band grows with the screen instead of running into the time.
+    {
+        const int y = caps_top_y - GRAPH_PAD_TOP;
+        const int h = time_caps_y - internal_margin - y;
+        s_graph_band_h = h - GRAPH_PAD_TOP - GRAPH_PAD_BOTTOM;
+        s_graph_layer = make_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), graph_layer_update_proc);
+
+        // add_debug_outline(GRect(0, y, PBL_DISPLAY_WIDTH, h)); // Debug (entire layer)
+        // add_debug_outline(GRect(0, caps_top_y, PBL_DISPLAY_WIDTH, s_graph_band_h)); // Debug (data band only)
+    }
+
     // --- BG value ------------------------------------------------------------
     {
-        const int y = top_gap + edge_margin - cap_offset(FONT_BG_VALUE);
+        const int y = caps_top_y - cap_offset(FONT_BG_VALUE);
         const int h = 42;
         s_bg_layer =
             make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_BG_VALUE, GTextAlignmentCenter);
@@ -871,27 +886,18 @@ static void window_load(Window *window) {
         // add_debug_outline(GRect(x, y, w, h));
     }
 
-    // --- Graph ---------------------------------------------------------------
-    const int y_graph = (PBL_DISPLAY_HEIGHT - GRAPH_LAYER_H) / 2 - 11;
-    {
-        const int y = y_graph;
-        s_graph_layer = make_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, GRAPH_LAYER_H), graph_layer_update_proc);
-
-        // add_debug_outline(GRect(0, y, PBL_DISPLAY_WIDTH, GRAPH_LAYER_H)); // Debug (entire layer)
-        // add_debug_outline(GRect(0, y + GRAPH_PAD_TOP, PBL_DISPLAY_WIDTH, GRAPH_BAND_H)); // Debug (data band only)
-    }
-
     // --- Status --------------------------------------------------------------
+    // Caps end just above the time's, so the strip overlays the bottom of the graph but never the
+    // time or the date.
     {
-        const int y = y_graph + GRAPH_LAYER_H - STATUS_H;
+        const int y = time_caps_y - internal_margin - STATUS_CAP_H - cap_offset(STATUS_FONT);
         const int h = STATUS_H; // Todo tighten and unify
         s_status_layer = make_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), status_layer_update_proc);
 
-        // add_debug_outline(GRect(0, STATUS_TOP_Y, PBL_DISPLAY_WIDTH, STATUS_H));
+        // add_debug_outline(GRect(0, y, PBL_DISPLAY_WIDTH, h));
     }
 
     // --- Date ----------------------------------------------------------------
-    const int date_y = PBL_DISPLAY_HEIGHT - bottom_gap - edge_margin - 30;
     {
         const int h = 30;  // taller than the font so descenders ("y" in "Saturday") are not clipped
         const int y = date_y;
@@ -904,7 +910,7 @@ static void window_load(Window *window) {
     // --- Time ----------------------------------------------------------------
     {
         const int h = 42;
-        const int y = date_y + cap_offset(FONT_KEY_GOTHIC_24_BOLD) - internal_margin - h;
+        const int y = time_y;
         s_time_layer =
             make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_TIME, GTextAlignmentCenter);
 
