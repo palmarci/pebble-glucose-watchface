@@ -6,6 +6,8 @@ node_modules/
 screens/
 # Local clangd config (absolute SDK paths, machine-specific — see CLAUDE.md "Gotchas")
 compile_flags.txt
+# Machine-local compile flags read by wscript
+local_defines.txt
 
 # stray bytecode from importing tools/mock_sender.py directly
 __pycache__/

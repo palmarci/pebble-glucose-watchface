@@ -149,7 +149,7 @@ static uint8_t s_graph_low_line = 36;               // 4.0 mmol/L
 static char s_ago_display[16];
 static char s_iob_display[12];
 static char s_time_display[8];
-static char s_date_display[24]; // longest: "Wednesday, 17   W38"
+static char s_date_display[16];
 
 static void safe_strncpy(char *dst, const char *src, size_t dst_size) {
     if (dst_size > 0) {
@@ -298,32 +298,24 @@ static void update_pump_indicator(void) {
         layer_mark_dirty(s_pump_layer);
 }
 
-// Full weekday plus week number overflows narrow screens on long names ("Wednesday, 16   W38" at 144 px).
-static bool date_fits(void) {
-    const GSize size =
-        graphics_text_layout_get_content_size(s_date_display, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-                                              GRect(0, 0, 2 * PBL_DISPLAY_WIDTH, 30), GTextOverflowModeFill,
-                                              GTextAlignmentLeft);
-    return size.w <= PBL_DISPLAY_WIDTH;
-}
-
 static void update_time_and_date(void) {
     time_t now = time(NULL);
     struct tm *time = localtime(&now);
 
     strftime(s_time_display, sizeof(s_time_display), clock_is_24h_style() ? "%H:%M" : "%I:%M", time);
 
+#ifdef FULL_WEEKDAY_DATE
+    // "Wednesday, 16" (set in local_defines.txt, see wscript)
+    strftime(s_date_display, sizeof(s_date_display), "%A, %d", time);
+#else
     if (time->tm_mday < 10) {
         // %e = " 9" with a space or "10"
-        strftime(s_date_display, sizeof(s_date_display), "%A,%e   W%V", time);
-        if (!date_fits())
-            strftime(s_date_display, sizeof(s_date_display), "%a%e   W%V", time);
+        strftime(s_date_display, sizeof(s_date_display), "%a%e   W%V", time);
     } else {
         // %d = "09" with a zero, or "10"
-        strftime(s_date_display, sizeof(s_date_display), "%A, %d   W%V", time);
-        if (!date_fits())
-            strftime(s_date_display, sizeof(s_date_display), "%a %d   W%V", time);
+        strftime(s_date_display, sizeof(s_date_display), "%a %d   W%V", time);
     }
+#endif
 
     // Guarded for the same reason as the BG/ago/IOB layers: the tick is subscribed before
     // window_load creates the layers, so a tick landing in the launch gap would hit
