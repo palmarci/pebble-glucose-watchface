@@ -15,7 +15,9 @@
 // (aplite/flint) colors render as black/white, so the value falls back to white there.
 #define COLOR_WINDOW_BG GColorBlack
 #define COLOR_FG        GColorWhite
-#define COLOR_BG_LOW    GColorRed      // below the low line
+// Folly (#FF0055), not pure red: the blue pulls it away from orange, so it stays distinct from the
+// yellow at low backlight.
+#define COLOR_BG_LOW    GColorFolly    // below the low line
 #define COLOR_BG_OK     GColorGreen    // within range
 #define COLOR_BG_HIGH   GColorYellow   // above the high line
 
