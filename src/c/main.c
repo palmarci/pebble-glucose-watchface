@@ -357,9 +357,9 @@ static void draw_chevron(GContext *ctx, int16_t cx, int16_t apex_y, int16_t base
 // reading, so by the time this proc runs it only ever needs to draw an up or down shape.
 static void trend_row_update_proc(Layer *layer, GContext *ctx) {
     const bool up = (s_trend_arrow == TREND_SLANT_UP || s_trend_arrow == TREND_UP ||
-                     s_trend_arrow == TREND_DOUBLE_UP);
+                     s_trend_arrow == TREND_DOUBLE_UP || s_trend_arrow == TREND_TRIPLE_UP);
     const bool down = (s_trend_arrow == TREND_SLANT_DOWN || s_trend_arrow == TREND_DOWN ||
-                       s_trend_arrow == TREND_DOUBLE_DOWN);
+                       s_trend_arrow == TREND_DOUBLE_DOWN || s_trend_arrow == TREND_TRIPLE_DOWN);
     if (!up && !down) {
         return; // shouldn't happen while visible, but never draw garbage for a future arrow value
     }
@@ -375,7 +375,9 @@ static void trend_row_update_proc(Layer *layer, GContext *ctx) {
     graphics_context_set_stroke_color(ctx, COLOR_FG);
     graphics_context_set_stroke_width(ctx, 2);
 
-    const int n = (s_trend_arrow == TREND_DOUBLE_UP || s_trend_arrow == TREND_DOUBLE_DOWN) ? 2 : 1;
+    const int n = (s_trend_arrow == TREND_TRIPLE_UP || s_trend_arrow == TREND_TRIPLE_DOWN) ? 3
+                 : (s_trend_arrow == TREND_DOUBLE_UP || s_trend_arrow == TREND_DOUBLE_DOWN) ? 2
+                                                                                            : 1;
     const int16_t spacing = 2 * half_w + 4; // gap between adjacent arrows' centers
     const int16_t total_w = spacing * (n - 1);
     const int16_t first_cx = bounds.size.w / 2 - total_w / 2;
