@@ -54,6 +54,7 @@ def sdk_platforms():
 # Protocol keys (keep in sync with src/c/protocol.h).
 KEY_BG_TIMESTAMP = 10
 KEY_BG_STRING = 11
+KEY_TREND_ARROW = 13
 KEY_IOB_STRING = 14
 KEY_STATUS_STRING = 15
 KEY_STATUS_START = 17
@@ -62,6 +63,20 @@ KEY_PUMP_CONNECTED = 19
 KEY_GRAPH_DATA = 30
 KEY_GRAPH_HIGH_LINE = 31
 KEY_GRAPH_LOW_LINE = 32
+
+# Keep in sync with protocol.h's TREND_* constants.
+TREND_ARROWS = {
+    "unknown": 0,
+    "flat": 1,
+    "slant-up": 2,
+    "slant-down": 3,
+    "up": 4,
+    "down": 5,
+    "double-up": 6,
+    "double-down": 7,
+    "triple-up": 8,
+    "triple-down": 9,
+}
 
 # Wire values are mg/dL / 2, so one wire unit is 2 mg/dL. Presets are authored in mmol/L because
 # that's what the watch displays and what a reading looks like to a human.
@@ -308,6 +323,12 @@ def main():
         help="send KEY_PUMP_CONNECTED (0=offline, 1=connected); omit to not send it at all",
     )
     p.add_argument(
+        "--trend",
+        choices=sorted(TREND_ARROWS),
+        help="send KEY_TREND_ARROW; omit to not send it at all (the real sender omits it "
+             "whenever the pump's reading has no trend field)",
+    )
+    p.add_argument(
         "--screenshot", metavar="PATH", help="grab a screenshot after sending"
     )
     p.add_argument(
@@ -337,6 +358,8 @@ def main():
     fields, blob = build_message(points, **kwargs)
     if args.pump_connected is not None:
         fields[KEY_PUMP_CONNECTED] = ("uint", args.pump_connected)
+    if args.trend is not None:
+        fields[KEY_TREND_ARROW] = ("uint", TREND_ARROWS[args.trend])
     print(
         "%s: %d points, %d-byte blob, BG %s"
         % (args.preset, len(points), len(blob), fields[KEY_BG_STRING][1])

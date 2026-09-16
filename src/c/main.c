@@ -70,9 +70,20 @@
 // Fonts: BG value at 42px bold — the bold weight renders a clearly visible decimal point (the
 // Roboto 49 subset's period is a near-invisible dot, and the medium-numbers font's is too thin).
 // Time stays 42px, secondary text bumps to 28.
+//
+// No bigger system font is a safe swap-in for a flat/no-trend state: Roboto-49 is the next size up
+// and has exactly the near-invisible-dot problem this comment already warns about (confirmed by
+// trying it -- v6 briefly used it and reintroduced the bug it was chosen to avoid). The BG value
+// stays this one size regardless of whether the trend row below it is shown.
 #define FONT_BG_VALUE     FONT_KEY_BITHAM_42_BOLD
 #define FONT_SECONDARY    FONT_KEY_GOTHIC_28_BOLD
 #define FONT_TIME         FONT_KEY_BITHAM_42_BOLD
+#define BG_ROW_H 42 // FONT_BG_VALUE's own line height
+
+// Trend arrow row: a thin strip directly below the BG value, 1-2 small arrows side by side (never
+// stacked). Shown only for a valid, non-flat trend; hidden otherwise (flat/invalid/no reading).
+#define TREND_ROW_H   16
+#define TREND_ROW_GAP 2
 
 // Vertical padding at the top and bottom so the content does not hug the bezel edge.
 #define LAYOUT_TOP_GAP    12
@@ -99,10 +110,8 @@
 // band can be full width yet vertically tight to the caps. Layer-local coords, like every other layer
 // here; it paints only the band + text, leaving the rest transparent so the graph shows through.
 #define STATUS_FONT FONT_KEY_GOTHIC_18_BOLD
-#define STATUS_H 24            // one line of STATUS_FONT, with room for descenders
-#define STATUS_CAP_H 11        // STATUS_FONT's cap height (measured)
-#define STATUS_BAND_OFFSET_Y 4 // band top within the layer; the font's top padding drops the caps into it
-#define STATUS_BAND_H 17       // band height (caps + a little room)
+#define STATUS_H 24     // one line of STATUS_FONT, with room for descenders
+#define STATUS_CAP_H 11 // STATUS_FONT's cap height (measured)
 
 static Window *s_window;
 static TextLayer *s_bg_layer;
@@ -114,6 +123,8 @@ static TextLayer *s_date_layer;
 static Layer *s_graph_layer; // axes, trace and projection all draw here
 static int s_graph_band_h;   // px the BG value range maps onto; sized to the screen in window_load
 static Layer *s_pump_layer;  // pump connection indicator: cross while offline, blank while connected
+static Layer *s_trend_row_layer; // pump-provided trend arrow row (KEY_TREND_ARROW); blank when absent
+static int s_caps_top_y; // cap top of the BG value at its normal (small-font) size; set once in window_load
 static Layer *s_debug_layer; // draws the debug outlines below, nothing else
 
 // Debug outlines. Frames are registered rather than layers, so a TextLayer, a custom layer and a
@@ -136,6 +147,14 @@ static uint32_t s_status_end = 0;
 // otherwise -- not "unknown" -- so a relaunch shows the cross rather than carrying a stale
 // "connected" from before.
 static bool s_pump_connected = false;
+
+// Pump-provided trend arrow (KEY_TREND_ARROW). Distinct from the on-watch trend PROJECTION drawn on
+// the graph above (issue #1, extrapolated locally) -- this one comes straight from the pump's own
+// rate-of-change reading. Invalid (no arrow shown) until the sender says otherwise, and whenever a
+// reading arrives with no trend field: the sender omits the key rather than send TREND_UNKNOWN, so
+// "key absent" is the only signal that the arrow should go away.
+static bool s_trend_valid = false;
+static uint8_t s_trend_arrow = TREND_UNKNOWN;
 
 // Graph data (all BG values in "mg/dL / 2" wire units).
 static uint32_t s_graph_ref_timestamp = 0;
@@ -228,6 +247,34 @@ static GColor prv_bg_color(void) {
     return COLOR_BG_OK;
 }
 
+// Pixels from layer top to font cap height (defined near window_load, which is its main user).
+int cap_offset(const char *font_key);
+
+// Switch the BG value between its normal and "big" font/frame, and show/hide the trend row below
+// it, based on whether there's currently a trend worth a row for. No trend (flat, invalid, or no
+// reading yet): BG grows into FONT_BG_VALUE_BIG to fill the space the row would have used, rather
+// than leaving it blank. This never depends on the BG string's rendered width -- the row is full
+// width and independently centered, so it cannot collide with the ago/IOB corners the way an
+// icon placed beside the digits could.
+static void update_bg_trend_layout(void) {
+    if (!s_bg_layer) {
+        return;
+    }
+    // BG value's own font/frame never change (see FONT_BG_VALUE's comment) -- only the trend row
+    // below it shows or hides.
+    const bool show_trend_row = s_trend_valid && s_trend_arrow != TREND_FLAT && s_trend_arrow != TREND_UNKNOWN;
+    const int y = s_caps_top_y - cap_offset(FONT_BG_VALUE);
+
+    if (s_trend_row_layer) {
+        layer_set_hidden(s_trend_row_layer, !show_trend_row);
+        if (show_trend_row) {
+            layer_set_frame(s_trend_row_layer,
+                            GRect(0, y + BG_ROW_H + TREND_ROW_GAP, PBL_DISPLAY_WIDTH, TREND_ROW_H));
+        }
+        layer_mark_dirty(s_trend_row_layer);
+    }
+}
+
 static void update_bg_display(void) {
     // Stale -> blank the number rather than showing a value that hasn't updated in a while (a stale BG
     // sat on screen for ~8 h during an overnight outage). The "ago" label still conveys how old it is.
@@ -283,11 +330,11 @@ static void pump_layer_update_proc(Layer *layer, GContext *ctx) {
     }
     const GRect bounds = layer_get_bounds(layer);
     const GPoint center = GPoint(bounds.size.w / 2, bounds.size.h / 2);
-    const int16_t r = 4;
+    const int16_t r = 6;
 
     // Red would render black on B&W platforms, invisible on the black background.
     graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(COLOR_PUMP_OFFLINE, COLOR_FG));
-    graphics_context_set_stroke_width(ctx, 2);
+    graphics_context_set_stroke_width(ctx, 3);
     graphics_draw_line(ctx, GPoint(center.x - r, center.y - r), GPoint(center.x + r, center.y + r));
     graphics_draw_line(ctx, GPoint(center.x - r, center.y + r), GPoint(center.x + r, center.y - r));
 }
@@ -295,6 +342,53 @@ static void pump_layer_update_proc(Layer *layer, GContext *ctx) {
 static void update_pump_indicator(void) {
     if (s_pump_layer)
         layer_mark_dirty(s_pump_layer);
+}
+
+// One "^" (up) or "v" (down) chevron, apex at (cx, apex_y), base at base_y.
+static void draw_chevron(GContext *ctx, int16_t cx, int16_t apex_y, int16_t base_y, int16_t half_w) {
+    graphics_draw_line(ctx, GPoint(cx - half_w, base_y), GPoint(cx, apex_y));
+    graphics_draw_line(ctx, GPoint(cx, apex_y), GPoint(cx + half_w, base_y));
+}
+
+// The pump's own rate-of-change reading, drawn as 1-2 arrows SIDE BY SIDE in a row below the BG
+// value (never stacked, and never beside the digits -- both were tried and both could collide with
+// something depending on string width). Never derived from the graph on-watch -- see
+// s_trend_arrow's comment. update_bg_trend_layout hides this layer entirely for flat/invalid/no
+// reading, so by the time this proc runs it only ever needs to draw an up or down shape.
+static void trend_row_update_proc(Layer *layer, GContext *ctx) {
+    const bool up = (s_trend_arrow == TREND_SLANT_UP || s_trend_arrow == TREND_UP ||
+                     s_trend_arrow == TREND_DOUBLE_UP);
+    const bool down = (s_trend_arrow == TREND_SLANT_DOWN || s_trend_arrow == TREND_DOWN ||
+                       s_trend_arrow == TREND_DOUBLE_DOWN);
+    if (!up && !down) {
+        return; // shouldn't happen while visible, but never draw garbage for a future arrow value
+    }
+
+    const GRect bounds = layer_get_bounds(layer);
+    const int16_t cy = bounds.size.h / 2;
+    const int16_t half_w = 5;
+    // Slant is still a proper V, just a shallower one (shorter chevron_h relative to half_w) --
+    // that's what distinguishes "gently" rising/falling from a full arrow, not a different shape.
+    const bool slant = (s_trend_arrow == TREND_SLANT_UP || s_trend_arrow == TREND_SLANT_DOWN);
+    const int16_t chevron_h = slant ? 4 : 8;
+
+    graphics_context_set_stroke_color(ctx, COLOR_FG);
+    graphics_context_set_stroke_width(ctx, 2);
+
+    const int n = (s_trend_arrow == TREND_DOUBLE_UP || s_trend_arrow == TREND_DOUBLE_DOWN) ? 2 : 1;
+    const int16_t spacing = 2 * half_w + 4; // gap between adjacent arrows' centers
+    const int16_t total_w = spacing * (n - 1);
+    const int16_t first_cx = bounds.size.w / 2 - total_w / 2;
+    for (int i = 0; i < n; i++) {
+        const int16_t cx = first_cx + i * spacing;
+        const int16_t apex_y = up ? cy - chevron_h / 2 : cy + chevron_h / 2;
+        const int16_t base_y = up ? cy + chevron_h / 2 : cy - chevron_h / 2;
+        draw_chevron(ctx, cx, apex_y, base_y, half_w);
+    }
+}
+
+static void update_trend_indicator(void) {
+    update_bg_trend_layout();
 }
 
 static void update_time_and_date(void) {
@@ -541,6 +635,13 @@ static void trend_draw_projection(GContext *ctx, GRect bounds, GPoint pivot, flo
 }
 
 static void draw_projection(GContext *ctx, GRect bounds) {
+    // TODO: a BG at or above GRAPH_VALUE_MAX (16 mmol/L) clamps the pivot (graph_y() below) to the
+    // very top of the graph layer, which sits close enough to the ago/IOB row that the dotted
+    // projection can visually intrude into it (observed with a synthetic 23.9 mmol/L point during
+    // trend-arrow layout testing). Not new in this pass -- the axis has always been fixed at
+    // 2.2-16 mmol/L -- but worth fixing: either clamp the projection's start away from the top
+    // edge, or extend/compress the axis so a realistic high reading doesn't pin the pivot there.
+    //
     // Estimator chosen after a July 2026 soak: the plain last-two-points slope. It's the most responsive
     // and, extended tangent to the trace, matched the eye best. The smoothed alternatives soaked
     // alongside it — an exp-weighted regression and a quadratic slope-at-latest — lagged real turns and
@@ -726,6 +827,16 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
         update_pump_indicator();
     }
 
+    // Trend arrow: the key is only ever present alongside a BG push, and the sender omits it
+    // entirely (rather than sending TREND_UNKNOWN) when the current reading has no trend field --
+    // so its absence here must clear any previously shown arrow, not leave the old one stale.
+    if (bg_tuple) {
+        Tuple *trend_tuple = dict_find(iter, KEY_TREND_ARROW);
+        s_trend_valid = (trend_tuple != NULL);
+        s_trend_arrow = trend_tuple ? trend_tuple->value->uint8 : TREND_UNKNOWN;
+        update_trend_indicator();
+    }
+
     // Graph data
     Tuple *graph_tuple = dict_find(iter, KEY_GRAPH_DATA);
     if (graph_tuple && parse_graph_blob(graph_tuple->value->data, graph_tuple->length)) {
@@ -761,7 +872,8 @@ static void send_capability_announcement(void) {
         return;
     }
     dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
-    dict_write_uint32(iter, KEY_CAPABILITIES, CAP_BG | CAP_IOB | CAP_STATUS | CAP_PUMP_CONNECTED);
+    dict_write_uint32(iter, KEY_CAPABILITIES,
+                      CAP_BG | CAP_IOB | CAP_STATUS | CAP_PUMP_CONNECTED | CAP_TREND_ARROW);
     dict_write_uint8(iter, KEY_GRAPH_HOURS, GRAPH_HOURS);
     if (app_message_outbox_send() != APP_MSG_OK) {
         APP_LOG(APP_LOG_LEVEL_ERROR, "outbox_send failed");
@@ -823,9 +935,14 @@ static void window_load(Window *window) {
     const int bottom_gap = PBL_IF_RECT_ELSE(LAYOUT_BOTTOM_GAP, 0);
 
     const int caps_top_y = top_gap + edge_margin; // cap top of the BG value, the topmost text
+    s_caps_top_y = caps_top_y; // update_bg_trend_layout needs this after window_load returns
     const int date_y = PBL_DISPLAY_HEIGHT - bottom_gap - edge_margin - 30;
     const int time_y = date_y + cap_offset(FONT_KEY_GOTHIC_24_BOLD) - internal_margin - 42;
     const int time_caps_y = time_y + cap_offset(FONT_TIME);
+    // Ago/IOB cap top matches the BG value's own cap top (caps_top_y), not their box origin --
+    // using the box origin as their y left their caps visibly lower than the BG digits' caps.
+    const int top_row_y = caps_top_y - cap_offset(FONT_SECONDARY);
+    const int top_row_h = 28;
 
     // --- Graph ---------------------------------------------------------------
     // Created first so all text draws over it. The value band runs from the top row's cap top to just
@@ -844,56 +961,62 @@ static void window_load(Window *window) {
     // --- BG value ------------------------------------------------------------
     {
         const int y = caps_top_y - cap_offset(FONT_BG_VALUE);
-        const int h = 42;
         s_bg_layer =
-            make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_BG_VALUE, GTextAlignmentCenter);
+            make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, BG_ROW_H), FONT_BG_VALUE, GTextAlignmentCenter);
 
-        // add_debug_outline(GRect(0, y, PBL_DISPLAY_WIDTH, h));
+        // add_debug_outline(GRect(0, y, PBL_DISPLAY_WIDTH, BG_ROW_H));
     }
 
     // --- Time ago ------------------------------------------------------------
     {
         const int w = 52;
-        const int h = 28;
         const int x = PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_WIDTH / 10);
-        const int y = PBL_IF_RECT_ELSE(top_gap + edge_margin, PBL_DISPLAY_HEIGHT / 6);
-        s_ago_layer = make_text_layer(root, GRect(x, y, w, h), FONT_SECONDARY, GTextAlignmentLeft);
+        s_ago_layer = make_text_layer(root, GRect(x, top_row_y, w, top_row_h), FONT_SECONDARY, GTextAlignmentLeft);
 
-        // add_debug_outline(GRect(x, y, w, h));
+        // add_debug_outline(GRect(x, top_row_y, w, top_row_h));
     }
 
     // --- Insulin on board ----------------------------------------------------
     {
         const int w = 52;
-        const int h = 28;
         const int x = PBL_DISPLAY_WIDTH - w - PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_WIDTH / 10);
-        const int y = PBL_IF_RECT_ELSE(top_gap + edge_margin, PBL_DISPLAY_HEIGHT / 6);
-        s_iob_layer = make_text_layer(root, GRect(x, y, w, h), FONT_SECONDARY, GTextAlignmentRight);
+        s_iob_layer = make_text_layer(root, GRect(x, top_row_y, w, top_row_h), FONT_SECONDARY, GTextAlignmentRight);
 
-        // add_debug_outline(GRect(x, y, w, h));
+        // add_debug_outline(GRect(x, top_row_y, w, top_row_h));
     }
 
     // --- Pump connection indicator --------------------------------------------
-    // Left corner, directly under the "ago" (time-since-reading) label: both are link/staleness
-    // metadata, distinct from the BG value (centered) and IOB (right corner) they sit between.
-    // Below the ago row rather than beside it, so it never competes with ago's own text.
+    // Below the "ago" label (not beside it, not sharing its origin): the two used to collide
+    // whenever both were showing. Below is free real estate regardless of what ago is currently
+    // displaying.
     {
-        const int ago_iob_h = 28;  // must match the ago/iob layers' own h, above
-        const int w = 16;
-        const int h = 14;
+        const int w = 20;
+        const int h = 18;
         const int x = PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_WIDTH / 10);
-        const int y = PBL_IF_RECT_ELSE(top_gap + edge_margin, PBL_DISPLAY_HEIGHT / 6) + ago_iob_h;
+        const int y = top_row_y + top_row_h + internal_margin;
         s_pump_layer = make_layer(root, GRect(x, y, w, h), pump_layer_update_proc);
 
         // add_debug_outline(GRect(x, y, w, h));
     }
 
+    // --- Trend arrow row -------------------------------------------------------
+    // Frame is a placeholder; update_bg_trend_layout (called via update_trend_indicator below)
+    // places and sizes it for real, and hides it unless the trend is valid and non-flat.
+    {
+        s_trend_row_layer =
+            make_layer(root, GRect(0, 0, PBL_DISPLAY_WIDTH, TREND_ROW_H), trend_row_update_proc);
+        layer_set_hidden(s_trend_row_layer, true);
+    }
+
     // --- Status --------------------------------------------------------------
     // Caps end just above the time's, so the strip overlays the bottom of the graph but never the
-    // time or the date.
+    // time or the date. (Reverted an attempted rewrite that moved this ~19px further up than
+    // intended and drove it into the graph's low line -- time_y is the time box's top, well above
+    // its visible cap height, not a usable anchor on its own.) The extra 3px nudges it a little
+    // further from the time than the bare formula, on request.
     {
-        const int y = time_caps_y - internal_margin - STATUS_CAP_H - cap_offset(STATUS_FONT);
-        const int h = STATUS_H; // Todo tighten and unify
+        const int y = time_caps_y - internal_margin - STATUS_CAP_H - cap_offset(STATUS_FONT) - 3;
+        const int h = STATUS_H;
         s_status_layer = make_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), status_layer_update_proc);
 
         // add_debug_outline(GRect(0, y, PBL_DISPLAY_WIDTH, h));
@@ -927,6 +1050,7 @@ static void window_load(Window *window) {
     update_iob_display();
     update_status_display();
     update_pump_indicator();
+    update_trend_indicator();
     update_time_and_date();
 }
 
@@ -939,6 +1063,7 @@ static void window_unload(Window *window) {
     text_layer_destroy(s_date_layer);
     layer_destroy(s_graph_layer);
     layer_destroy(s_pump_layer);
+    layer_destroy(s_trend_row_layer);
     layer_destroy(s_debug_layer);
 }
 
