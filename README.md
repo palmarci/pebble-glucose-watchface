@@ -13,7 +13,7 @@ This watchface uses a generic [Pebble Glucose Protocol](https://github.com/morte
 Options:
 * [MiniMed Pebble Bridge](https://github.com/mortenfyhn/minimed-pebble-bridge) - an experimental MiniMed pump companion app
 * xDrip - hopefully one day
-* [Direct MiniMed pump connection](https://github.com/mortenfyhn/PebbleOS) - this is what I use
+* [Direct MiniMed pump connection](https://github.com/OpenMinimed/PebbleOS/tree/dev/v4.36.2) - this is what I use
 * Make your own app implementing the same [protocol](https://github.com/mortenfyhn/pebble-glucose-protocol)
 
 ## Development
