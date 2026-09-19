@@ -520,78 +520,45 @@ static void format_mmol(char *out, size_t size, int wire) {
         snprintf(out, size, "%d.%d", tenths / 10, tenths % 10);
 }
 
-// Small number on a black plate so it stays readable over the trace.
-#define SCALE_LABEL_W 26
-#define SCALE_LABEL_H 14
-static void draw_scale_label(GContext *ctx, const char *text, int center_x, int top_y, GTextAlignment align) {
-    const GRect box = GRect(center_x - SCALE_LABEL_W / 2, top_y, SCALE_LABEL_W, SCALE_LABEL_H);
-    graphics_context_set_fill_color(ctx, COLOR_WINDOW_BG);
-    graphics_fill_rect(ctx, box, 0, GCornerNone);
-    graphics_context_set_text_color(ctx, COLOR_FG);
-    // The plate reaches the screen edge (covering the axis line's stub); the text sits inset from it.
-    const int inset = (align == GTextAlignmentLeft) ? 3 : 0;
-    graphics_draw_text(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_14),
-                       GRect(box.origin.x + inset, box.origin.y - 3, box.size.w - inset, box.size.h + 3),
-                       GTextOverflowModeTrailingEllipsis, align, NULL);
-}
-
-// Scale: the axis top and the two target lines, in the left margin, so it is always clear what the
-// vertical extent means.
-static void draw_scale_labels(GContext *ctx) {
-    char text[8];
-    const int left = SCALE_LABEL_W / 2;
-    format_mmol(text, sizeof(text), s_axis_max);
-    draw_scale_label(ctx, text, left, graph_y(s_axis_max) - 1, GTextAlignmentLeft);
-    format_mmol(text, sizeof(text), s_graph_high_line);
-    // Under its line when the axis top is too close above for both numbers to fit between them.
-    const int high_y = graph_y(s_graph_high_line);
-    const bool crowded = high_y - graph_y(s_axis_max) < 2 * SCALE_LABEL_H;
-    draw_scale_label(ctx, text, left, crowded ? high_y + 1 : high_y - SCALE_LABEL_H, GTextAlignmentLeft);
-    format_mmol(text, sizeof(text), s_graph_low_line);
-    draw_scale_label(ctx, text, left, graph_y(s_graph_low_line) - SCALE_LABEL_H, GTextAlignmentLeft);
-}
-
-// The window's highest and lowest readings, labeled at their points. Skipped for the newest reading
-// (the big number already shows it) and for a window that hardly moves.
-static void draw_extreme_labels(GContext *ctx, GRect bounds) {
+// The window's highest reading, as a tiny number on a black plate so it stays readable over the
+// trace. The only text on the graph.
+#define PEAK_LABEL_W 26
+#define PEAK_LABEL_H 14
+static void draw_peak_label(GContext *ctx, GRect bounds) {
     const int first = first_visible_point();
-    if (s_graph_count - first < 3)
+    if (first >= s_graph_count)
         return;
-    int hi = first, lo = first;
+    int hi = first;
     for (int i = first; i < s_graph_count; i++) {
         if (s_graph_bg_values[i] >= s_graph_bg_values[hi])
             hi = i;
-        if (s_graph_bg_values[i] <= s_graph_bg_values[lo])
-            lo = i;
     }
-    if (s_graph_bg_values[hi] - s_graph_bg_values[lo] < GRAPH_AXIS_STEP / 2)
-        return;
 
     const int w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
     const uint32_t now = time(NULL);
-    const int extremes[2] = {hi, lo};
-    for (int k = 0; k < 2; k++) {
-        const int i = extremes[k];
-        if (i == s_graph_count - 1)
-            continue;
-        const uint32_t pt_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[i] * 60;
-        const int mins_ago = (int)(((int64_t)now - (int64_t)pt_ts) / 60);
-        int x = w - (mins_ago * w) / (GRAPH_HOURS * 60);
-        if (x < SCALE_LABEL_W + 4) // keep clear of the left-margin scale numbers
-            x = SCALE_LABEL_W + 4;
-        if (x > w - SCALE_LABEL_W / 2)
-            x = w - SCALE_LABEL_W / 2;
-        const int y = graph_y(s_graph_bg_values[i]);
-        char text[8];
-        format_mmol(text, sizeof(text), s_graph_bg_values[i]);
-        // Peak above its point, trough below, unless that would leave the band.
-        int top = (k == 0) ? y - STROKE_WIDTH - SCALE_LABEL_H : y + STROKE_WIDTH;
-        if (top < 0)
-            top = y + STROKE_WIDTH;
-        if (top + SCALE_LABEL_H > bounds.size.h)
-            top = y - STROKE_WIDTH - SCALE_LABEL_H;
-        draw_scale_label(ctx, text, x, top, GTextAlignmentCenter);
-    }
+    const uint32_t pt_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[hi] * 60;
+    const int mins_ago = (int)(((int64_t)now - (int64_t)pt_ts) / 60);
+    int x = w - (mins_ago * w) / (GRAPH_HOURS * 60);
+    if (x < PEAK_LABEL_W / 2)
+        x = PEAK_LABEL_W / 2;
+    if (x > w - PEAK_LABEL_W / 2)
+        x = w - PEAK_LABEL_W / 2;
+
+    // Above its point, or below it when the point is at the top of the band.
+    const int y = graph_y(s_graph_bg_values[hi]);
+    int top = y - STROKE_WIDTH - PEAK_LABEL_H;
+    if (top < 0)
+        top = y + STROKE_WIDTH;
+
+    char text[8];
+    format_mmol(text, sizeof(text), s_graph_bg_values[hi]);
+    const GRect box = GRect(x - PEAK_LABEL_W / 2, top, PEAK_LABEL_W, PEAK_LABEL_H);
+    graphics_context_set_fill_color(ctx, COLOR_WINDOW_BG);
+    graphics_fill_rect(ctx, box, 0, GCornerNone);
+    graphics_context_set_text_color(ctx, COLOR_FG);
+    graphics_draw_text(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_14),
+                       GRect(box.origin.x, box.origin.y - 3, box.size.w, box.size.h + 3),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
 static void draw_graph_axes(GContext *ctx, GRect bounds) {
@@ -826,8 +793,7 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     draw_bg_graph(ctx, bounds);
     draw_meal(ctx, bounds);
     draw_projection(ctx, bounds);
-    draw_scale_labels(ctx);
-    draw_extreme_labels(ctx, bounds);
+    draw_peak_label(ctx, bounds);
 }
 
 static void send_capability_announcement(void);

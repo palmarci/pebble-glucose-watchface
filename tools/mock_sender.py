@@ -212,6 +212,13 @@ PRESETS = {
             {"iob": "7.6", "trend": "double-up", "status": "SMARTGUARD"},
         ),
     ),
+    "spike": (
+        "7 two hours ago, a spike to 19 an hour ago, back to 8 now (unrealistic on purpose)",
+        lambda: (
+            noisy(curve([(0, 7.0), (60, 19.0), (120, 8.0)], list(range(0, 121, 5)))),
+            {"iob": "2.4", "trend": "down"},
+        ),
+    ),
     "crowded": (
         "worst case for space: two-digit BG, age counter, IOB, status strip",
         # Deliberately the worst case for horizontal space: 10.0 is the widest the big number gets,
