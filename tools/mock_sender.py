@@ -124,6 +124,15 @@ def curve(keyframes, ts, window=120):
     return out
 
 
+def noisy(points, amplitude=0.12):
+    """Add a fixed pseudo-random wobble (mmol/L) to `points`, so runs are repeatable."""
+    out = []
+    for i, (age, mmol) in enumerate(points):
+        wobble = amplitude * ((i * 7919) % 13 - 6) / 6.0
+        out.append((age, mmol + (0 if age == 0 else wobble)))  # the newest reading stays exact
+    return out
+
+
 # The day both showcase presets sample, as (minutes, mmol) keyframes: 5.4 up to 7.9, back down to a
 # wandering 5.7-6.0 stretch, a rise to a 8.2 peak, then a slow fall. showcase shows the first two
 # hours of it, showcase-full the two hours from 30 min in.
@@ -169,6 +178,36 @@ PRESETS = {
                 "status": "SUSPENDED",
                 "status_start": int(time.time() - 5 * 60),  # 5 min ago
             },
+        ),
+    ),
+    # The realistic-* presets are typical days for design review across platforms. Keyframes get a
+    # small deterministic wobble (sensor noise) so the trace does not look hand-drawn.
+    "realistic-meal": (
+        "after a meal: a rise from 5.8 to a 10.6 peak, still climbing, IOB on board",
+        lambda: (
+            noisy(curve([(0, 5.8), (25, 5.9), (55, 7.6), (85, 10.2), (120, 10.6)], list(range(0, 121, 5)))),
+            {"iob": "3.8", "trend": "up"},
+        ),
+    ),
+    "realistic-low": (
+        "falling toward a low: 7.4 down to 3.7, IOB on board",
+        lambda: (
+            noisy(curve([(0, 7.4), (40, 6.6), (80, 4.9), (120, 3.7)], list(range(0, 121, 5)))),
+            {"iob": "1.2", "trend": "down"},
+        ),
+    ),
+    "realistic-overnight": (
+        "overnight: steady 5-6 mmol/L, no IOB to speak of, flat",
+        lambda: (
+            noisy(curve([(0, 5.6), (50, 5.9), (100, 5.4), (120, 5.5)], list(range(0, 121, 5)))),
+            {"iob": "0.4", "trend": "flat"},
+        ),
+    ),
+    "realistic-high": (
+        "high after a big meal: 13.9 and rising fast, double arrow, large IOB",
+        lambda: (
+            noisy(curve([(0, 9.1), (40, 11.0), (80, 13.0), (120, 13.9)], list(range(0, 121, 5)))),
+            {"iob": "7.6", "trend": "double-up", "status": "SMARTGUARD"},
         ),
     ),
     "crowded": (
@@ -350,6 +389,7 @@ def main():
 
     points, overrides = PRESETS[args.preset][1]()
     kwargs = dict(overrides)
+    preset_trend = kwargs.pop("trend", None)  # a preset's own arrow, unless --trend overrides it
     for name in ("bg", "iob", "status", "high", "low"):
         value = getattr(args, name)
         if value is not None:
@@ -358,8 +398,9 @@ def main():
     fields, blob = build_message(points, **kwargs)
     if args.pump_connected is not None:
         fields[KEY_PUMP_CONNECTED] = ("uint", args.pump_connected)
-    if args.trend is not None:
-        fields[KEY_TREND_ARROW] = ("uint", TREND_ARROWS[args.trend])
+    trend = args.trend if args.trend is not None else preset_trend
+    if trend is not None:
+        fields[KEY_TREND_ARROW] = ("uint", TREND_ARROWS[trend])
     print(
         "%s: %d points, %d-byte blob, BG %s"
         % (args.preset, len(points), len(blob), fields[KEY_BG_STRING][1])
