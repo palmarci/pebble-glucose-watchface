@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Screenshot the real watch through the phone (adb USB tunnel + Developer Connection).
 
-    tools/watch_screenshot.py                 # /tmp/wf_screens/watch_<timestamp>.png (+ _3x)
+    tools/watch_screenshot.py                 # ./watch_<timestamp>.png (+ _3x), in the current directory
     tools/watch_screenshot.py -o shot.png --scale 4
     tools/watch_screenshot.py --count 5 --every 60    # a series, one a minute
 
-The watch has to be in NORMAL mode (a phone session), like `pebble logs`. Whatever is on screen is
-captured, so this shows the watchface exactly as the pump firmware is driving it.
+Whatever is on screen is captured, so this shows the watchface exactly as the pump firmware is
+driving it.
 """
 import argparse
 import os
@@ -22,7 +22,7 @@ def shoot(path, scale):
         capture_output=True, text=True, timeout=120,
     )
     if r.returncode != 0 or not os.path.exists(path):
-        print("screenshot failed (NORMAL mode? Developer Connection on?):\n" + r.stderr[-300:], file=sys.stderr)
+        print("screenshot failed (phone connected? Developer Connection on?):\n" + r.stderr[-300:], file=sys.stderr)
         return False
     print(path)
     if scale > 1:
@@ -45,8 +45,7 @@ def main():
     ap.add_argument("--every", type=float, default=60, help="seconds between screenshots of a series")
     args = ap.parse_args()
 
-    os.makedirs("/tmp/wf_screens", exist_ok=True)
-    base = args.out or time.strftime("/tmp/wf_screens/watch_%Y%m%d_%H%M%S.png")
+    base = args.out or time.strftime("watch_%Y%m%d_%H%M%S.png")
     ok = True
     for n in range(args.count):
         path = base if args.count == 1 else "%s_%d.png" % (os.path.splitext(base)[0], n + 1)

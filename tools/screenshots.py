@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the review screenshots: every interesting scenario on the chosen emulator platforms.
 
-    tools/screenshots.py                       # emery (the PT2), into /tmp/wf_screens/<timestamp>
+    tools/screenshots.py                       # emery (the PT2), into ./screenshots_<timestamp>
     tools/screenshots.py --platforms all       # every platform the watchface targets
     tools/screenshots.py --platforms emery,aplite --out shots --scale 3
     tools/screenshots.py --only spike,no-data  # a subset of scenarios
@@ -121,7 +121,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--platforms", default=",".join(DEFAULT_PLATFORMS), help="comma list, or 'all'")
     ap.add_argument("--only", help="comma list of scenario names (default: all)")
-    ap.add_argument("--out", help="output directory (default /tmp/wf_screens/<timestamp>)")
+    ap.add_argument("--out", help="output directory (default ./screenshots_<timestamp> in the current directory)")
     ap.add_argument("--scale", type=int, default=2, help="contact sheet upscale factor")
     ap.add_argument("--settle", type=float, default=4.0, help="seconds to wait after each install")
     ap.add_argument("--no-build", action="store_true", help="skip `pebble build`")
@@ -140,7 +140,7 @@ def main():
         print("unknown: %s" % ", ".join(unknown), file=sys.stderr)
         return 2
 
-    out_dir = args.out or time.strftime("/tmp/wf_screens/%Y%m%d_%H%M%S")
+    out_dir = args.out or time.strftime("screenshots_%Y%m%d_%H%M%S")
     os.makedirs(out_dir, exist_ok=True)
     if not args.no_build:
         r = run(["pebble", "build"])

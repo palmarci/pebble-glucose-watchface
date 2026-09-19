@@ -11,3 +11,5 @@ local_defines.txt
 
 # stray bytecode from importing tools/mock_sender.py directly
 __pycache__/
+watch_*.png
+screenshots_*/
