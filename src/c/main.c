@@ -37,9 +37,13 @@
 // and the phone status-bar icon go stale at the same time.
 #define STALE_MINUTES 15
 
-// Fixed y-axis 2.2–16 mmol/L, in "mg/dL / 2" wire units (40..288 mg/dL). Out-of-range clamps to edge.
+// Y-axis in "mg/dL / 2" wire units. The bottom is fixed at 2.2 mmol/L. The top follows the data in
+// 2 mmol/L steps between 12 and 16 mmol/L (a normal day gets the most pixels per mmol/L, a high
+// one still fits); anything above 16 clamps to the top edge. See update_axis_max().
 #define GRAPH_VALUE_MIN 20
-#define GRAPH_VALUE_MAX 144
+#define GRAPH_VALUE_MAX 144        // 16 mmol/L, the highest the axis goes
+#define GRAPH_AXIS_DEFAULT_MAX 108 // 12 mmol/L, the lowest the top goes
+#define GRAPH_AXIS_STEP 18         // ~2 mmol/L
 // Don't connect points more than this far apart (a sensor gap draws as a break, not a straight line).
 #define GRAPH_GAP_THRESHOLD_MINUTES 15
 
@@ -471,12 +475,123 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
 
 // Map a BG value (mg/dL / 2) to a y inside the graph layer, clamping to the fixed range. The only place
 // that knows where the value band sits within the layer, so axes, trace and projection cannot disagree.
+static int s_axis_max = GRAPH_AXIS_DEFAULT_MAX; // current top of the y-axis, wire units
+
 static int graph_y(int bg) {
     if (bg < GRAPH_VALUE_MIN)
         bg = GRAPH_VALUE_MIN;
-    if (bg > GRAPH_VALUE_MAX)
-        bg = GRAPH_VALUE_MAX;
-    return GRAPH_PAD_TOP + s_graph_band_h - ((bg - GRAPH_VALUE_MIN) * s_graph_band_h) / (GRAPH_VALUE_MAX - GRAPH_VALUE_MIN);
+    if (bg > s_axis_max)
+        bg = s_axis_max;
+    return GRAPH_PAD_TOP + s_graph_band_h - ((bg - GRAPH_VALUE_MIN) * s_graph_band_h) / (s_axis_max - GRAPH_VALUE_MIN);
+}
+
+// Index range of the points inside the visible window (older ones have scrolled off the left edge).
+static int first_visible_point(void) {
+    const uint32_t now = time(NULL);
+    for (int i = 0; i < s_graph_count; i++) {
+        const uint32_t pt_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[i] * 60;
+        if ((int64_t)now - (int64_t)pt_ts <= (int64_t)GRAPH_HOURS * 3600)
+            return i;
+    }
+    return s_graph_count;
+}
+
+// Fit the top of the axis to the visible readings: the peak rounded up to the next step, never below
+// GRAPH_AXIS_DEFAULT_MAX or above GRAPH_VALUE_MAX. Must run before anything calls graph_y().
+static void update_axis_max(void) {
+    int peak = 0;
+    for (int i = first_visible_point(); i < s_graph_count; i++) {
+        if (s_graph_bg_values[i] > peak)
+            peak = s_graph_bg_values[i];
+    }
+    int top = GRAPH_AXIS_DEFAULT_MAX;
+    while (top < peak && top < GRAPH_VALUE_MAX)
+        top += GRAPH_AXIS_STEP;
+    s_axis_max = top;
+}
+
+// A wire value as mmol/L text: whole numbers bare ("10"), otherwise one decimal ("7.4"). Same
+// conversion constant as the firmware, so it matches the pump's own display.
+static void format_mmol(char *out, size_t size, int wire) {
+    const int tenths = (wire * 2 * 100000 + 90091) / 180182;
+    if (tenths % 10 == 0)
+        snprintf(out, size, "%d", tenths / 10);
+    else
+        snprintf(out, size, "%d.%d", tenths / 10, tenths % 10);
+}
+
+// Small number on a black plate so it stays readable over the trace.
+#define SCALE_LABEL_W 26
+#define SCALE_LABEL_H 14
+static void draw_scale_label(GContext *ctx, const char *text, int center_x, int top_y, GTextAlignment align) {
+    const GRect box = GRect(center_x - SCALE_LABEL_W / 2, top_y, SCALE_LABEL_W, SCALE_LABEL_H);
+    graphics_context_set_fill_color(ctx, COLOR_WINDOW_BG);
+    graphics_fill_rect(ctx, box, 0, GCornerNone);
+    graphics_context_set_text_color(ctx, COLOR_FG);
+    // The plate reaches the screen edge (covering the axis line's stub); the text sits inset from it.
+    const int inset = (align == GTextAlignmentLeft) ? 3 : 0;
+    graphics_draw_text(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_14),
+                       GRect(box.origin.x + inset, box.origin.y - 3, box.size.w - inset, box.size.h + 3),
+                       GTextOverflowModeTrailingEllipsis, align, NULL);
+}
+
+// Scale: the axis top and the two target lines, in the left margin, so it is always clear what the
+// vertical extent means.
+static void draw_scale_labels(GContext *ctx) {
+    char text[8];
+    const int left = SCALE_LABEL_W / 2;
+    format_mmol(text, sizeof(text), s_axis_max);
+    draw_scale_label(ctx, text, left, graph_y(s_axis_max) - 1, GTextAlignmentLeft);
+    format_mmol(text, sizeof(text), s_graph_high_line);
+    // Under its line when the axis top is too close above for both numbers to fit between them.
+    const int high_y = graph_y(s_graph_high_line);
+    const bool crowded = high_y - graph_y(s_axis_max) < 2 * SCALE_LABEL_H;
+    draw_scale_label(ctx, text, left, crowded ? high_y + 1 : high_y - SCALE_LABEL_H, GTextAlignmentLeft);
+    format_mmol(text, sizeof(text), s_graph_low_line);
+    draw_scale_label(ctx, text, left, graph_y(s_graph_low_line) - SCALE_LABEL_H, GTextAlignmentLeft);
+}
+
+// The window's highest and lowest readings, labeled at their points. Skipped for the newest reading
+// (the big number already shows it) and for a window that hardly moves.
+static void draw_extreme_labels(GContext *ctx, GRect bounds) {
+    const int first = first_visible_point();
+    if (s_graph_count - first < 3)
+        return;
+    int hi = first, lo = first;
+    for (int i = first; i < s_graph_count; i++) {
+        if (s_graph_bg_values[i] >= s_graph_bg_values[hi])
+            hi = i;
+        if (s_graph_bg_values[i] <= s_graph_bg_values[lo])
+            lo = i;
+    }
+    if (s_graph_bg_values[hi] - s_graph_bg_values[lo] < GRAPH_AXIS_STEP / 2)
+        return;
+
+    const int w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
+    const uint32_t now = time(NULL);
+    const int extremes[2] = {hi, lo};
+    for (int k = 0; k < 2; k++) {
+        const int i = extremes[k];
+        if (i == s_graph_count - 1)
+            continue;
+        const uint32_t pt_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[i] * 60;
+        const int mins_ago = (int)(((int64_t)now - (int64_t)pt_ts) / 60);
+        int x = w - (mins_ago * w) / (GRAPH_HOURS * 60);
+        if (x < SCALE_LABEL_W + 4) // keep clear of the left-margin scale numbers
+            x = SCALE_LABEL_W + 4;
+        if (x > w - SCALE_LABEL_W / 2)
+            x = w - SCALE_LABEL_W / 2;
+        const int y = graph_y(s_graph_bg_values[i]);
+        char text[8];
+        format_mmol(text, sizeof(text), s_graph_bg_values[i]);
+        // Peak above its point, trough below, unless that would leave the band.
+        int top = (k == 0) ? y - STROKE_WIDTH - SCALE_LABEL_H : y + STROKE_WIDTH;
+        if (top < 0)
+            top = y + STROKE_WIDTH;
+        if (top + SCALE_LABEL_H > bounds.size.h)
+            top = y - STROKE_WIDTH - SCALE_LABEL_H;
+        draw_scale_label(ctx, text, x, top, GTextAlignmentCenter);
+    }
 }
 
 static void draw_graph_axes(GContext *ctx, GRect bounds) {
@@ -625,13 +740,6 @@ static void trend_draw_projection(GContext *ctx, GRect bounds, GPoint pivot, flo
 }
 
 static void draw_projection(GContext *ctx, GRect bounds) {
-    // TODO: a BG at or above GRAPH_VALUE_MAX (16 mmol/L) clamps the pivot (graph_y() below) to the
-    // very top of the graph layer, which sits close enough to the ago/IOB row that the dotted
-    // projection can visually intrude into it (observed with a synthetic 23.9 mmol/L point during
-    // trend-arrow layout testing). Not new in this pass -- the axis has always been fixed at
-    // 2.2-16 mmol/L -- but worth fixing: either clamp the projection's start away from the top
-    // edge, or extend/compress the axis so a realistic high reading doesn't pin the pivot there.
-    //
     // Estimator chosen after a July 2026 soak: the plain last-two-points slope. It's the most responsive
     // and, extended tangent to the trace, matched the eye best. The smoothed alternatives soaked
     // alongside it — an exp-weighted regression and a quadratic slope-at-latest — lagged real turns and
@@ -658,12 +766,12 @@ static void draw_projection(GContext *ctx, GRect bounds) {
     const int graph_minutes = GRAPH_HOURS * 60;
     const int newest_x = graph_w - (age_min * graph_w) / graph_minutes;
     const float px_per_min = (float)graph_w / graph_minutes;
-    const float px_per_wire = (float)s_graph_band_h / (GRAPH_VALUE_MAX - GRAPH_VALUE_MIN);
+    const float px_per_wire = (float)s_graph_band_h / (s_axis_max - GRAPH_VALUE_MIN);
     const GPoint pivot = GPoint(newest_x, graph_y(s_graph_bg_values[s_graph_count - 1]));
     trend_draw_projection(ctx, bounds, pivot, slope, px_per_min, px_per_wire);
 }
 
-// A fork mark at the meal's time along the bottom of the value band (where the trace rarely goes),
+// A fork mark at the meal's time along the top of the value band (above almost every reading),
 // with the carbs in grams beside it. Placed on the same time axis as the trace.
 #define MEAL_ICON_H 11
 #define MEAL_TEXT_W 34
@@ -679,7 +787,7 @@ static void draw_meal(GContext *ctx, GRect bounds) {
     }
     const int graph_w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
     const int x = graph_w - (age_min * graph_w) / graph_minutes;
-    const int y = GRAPH_PAD_TOP + s_graph_band_h - MEAL_ICON_H - 2;
+    const int y = GRAPH_PAD_TOP + 1; // top of the band: the bottom is under the status strip
 
     graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(COLOR_MEAL, COLOR_FG));
     graphics_fill_rect(ctx, GRect(x - 4, y, 2, 5), 0, GCornerNone);     // tines
@@ -709,6 +817,7 @@ static void draw_no_data(GContext *ctx, GRect bounds) {
 // Axes behind the trace, projection on top of both.
 static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     const GRect bounds = layer_get_bounds(layer);
+    update_axis_max();
     draw_graph_axes(ctx, bounds);
     if (!has_reading()) {
         draw_no_data(ctx, bounds);
@@ -717,6 +826,8 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     draw_bg_graph(ctx, bounds);
     draw_meal(ctx, bounds);
     draw_projection(ctx, bounds);
+    draw_scale_labels(ctx);
+    draw_extreme_labels(ctx, bounds);
 }
 
 static void send_capability_announcement(void);
@@ -951,11 +1062,12 @@ static void window_load(Window *window) {
     const int top_row_h = 28;
 
     // --- Graph ---------------------------------------------------------------
-    // Created first so all text draws over it. The value band runs from the top row's cap top to just
-    // above the time: the rarely used high end sits behind the BG/IOB row rather than as an empty gap
-    // under it, and the band grows with the screen instead of running into the time.
+    // Created first so all text draws over it. The value band runs from under the BG value and its
+    // trend row to just above the time, so no reading can be drawn over the text, and it grows with
+    // the screen instead of running into the time.
     {
-        const int y = caps_top_y - GRAPH_PAD_TOP;
+        // Starts under the BG value and its trend row, so no reading can be drawn over the text.
+        const int y = caps_top_y + BG_ROW_H + TREND_ROW_GAP + TREND_ROW_H;
         const int h = time_caps_y - internal_margin - y;
         s_graph_band_h = h - GRAPH_PAD_TOP - GRAPH_PAD_BOTTOM;
         s_graph_layer = make_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), graph_layer_update_proc);
