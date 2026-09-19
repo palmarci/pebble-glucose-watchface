@@ -141,6 +141,13 @@ static bool s_pump_connected = false;
 // "key absent" is the only signal that the arrow should go away.
 // Latest meal (KEY_MEAL_CARBS/KEY_MEAL_TIMESTAMP): a fork mark on the graph at the time it was
 // recorded, with the carb amount beside it, for as long as that time is inside the graph window.
+// The sender's own forecast of the glucose 30 minutes after the newest reading (KEY_PREDICTED_BG).
+// When present it sets the projection's slope; without it the projection extrapolates the last two
+// points.
+#define PREDICTION_HORIZON_MIN 30
+static bool s_pred_valid = false;
+static uint16_t s_pred_mgdl = 0;
+
 static bool s_meal_valid = false;
 static uint16_t s_meal_grams = 0;
 static uint32_t s_meal_timestamp = 0;
@@ -712,9 +719,16 @@ static void draw_projection(GContext *ctx, GRect bounds) {
     // alongside it — an exp-weighted regression and a quadratic slope-at-latest — lagged real turns and
     // weren't worth their extra machinery at the 5-min sensor cadence. If a fancier estimator tempts you,
     // that's the history: it was tried and this won.
-    float slope;
-    if (!trend_slope(&slope))
+    // A forecast from the sender replaces that: the slope is the chord to its 30-minute value.
+    if (s_graph_count < 1)
         return;
+    float slope;
+    if (s_pred_valid) {
+        const float newest_wire = (float)s_graph_bg_values[s_graph_count - 1];
+        slope = ((float)s_pred_mgdl / 2.0f - newest_wire) / (float)PREDICTION_HORIZON_MIN;
+    } else if (!trend_slope(&slope)) {
+        return;
+    }
 
     // Don't extrapolate from stale data — no projection rather than a misleading one. (The BG number keeps
     // showing the last value once stale; the projection doesn't, since extrapolating from old points misleads.)
@@ -907,6 +921,13 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
         update_trend_indicator();
     }
 
+    // Prediction: like the trend arrow, sent with a BG push, and its absence clears the last one.
+    if (bg_tuple) {
+        Tuple *pred_tuple = dict_find(iter, KEY_PREDICTED_BG);
+        s_pred_valid = (pred_tuple != NULL);
+        s_pred_mgdl = pred_tuple ? pred_tuple->value->uint16 : 0;
+    }
+
     // Meal: the sender keeps the latest until a newer one replaces it, so absence means no change.
     Tuple *meal_tuple = dict_find(iter, KEY_MEAL_CARBS);
     Tuple *meal_ts_tuple = dict_find(iter, KEY_MEAL_TIMESTAMP);
@@ -956,7 +977,8 @@ static void send_capability_announcement(void) {
     }
     dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
     dict_write_uint32(iter, KEY_CAPABILITIES,
-                      CAP_BG | CAP_IOB | CAP_STATUS | CAP_PUMP_CONNECTED | CAP_TREND_ARROW | CAP_MEAL);
+                      CAP_BG | CAP_IOB | CAP_STATUS | CAP_PUMP_CONNECTED | CAP_TREND_ARROW | CAP_MEAL |
+                          CAP_PREDICTION);
     dict_write_uint8(iter, KEY_GRAPH_HOURS, GRAPH_HOURS);
     if (app_message_outbox_send() != APP_MSG_OK) {
         APP_LOG(APP_LOG_LEVEL_ERROR, "outbox_send failed");

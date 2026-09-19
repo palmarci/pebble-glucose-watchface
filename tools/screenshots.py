@@ -42,6 +42,8 @@ SCENARIOS = {
     "trend-slant-down": ("slanted arrow down", ["showcase", "--pump-connected", "1", "--trend", "slant-down"]),
     "trend-flat": ("flat trend, no arrow row", ["showcase", "--pump-connected", "1", "--trend", "flat"]),
     "no-trend": ("reading without a trend", ["showcase", "--pump-connected", "1"]),
+    "predicted-up": ("sender forecast well above the reading", ["showcase", "--pump-connected", "1", "--predicted", "190"]),
+    "predicted-down": ("sender forecast well below the reading", ["showcase", "--pump-connected", "1", "--predicted", "80"]),
     "status-suspended": ("suspended status strip", ["showcase", "--pump-connected", "1", "--status", "SUSPENDED"]),
     "lo": ("LO string", ["realistic-low", "--pump-connected", "1", "--bg", "LO"]),
     "hi": ("HI string", ["realistic-high", "--pump-connected", "1", "--bg", "HI"]),

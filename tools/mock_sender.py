@@ -62,6 +62,7 @@ KEY_STATUS_END = 18
 KEY_PUMP_CONNECTED = 19
 KEY_MEAL_CARBS = 20
 KEY_MEAL_TIMESTAMP = 21
+KEY_PREDICTED_BG = 22
 KEY_GRAPH_DATA = 30
 KEY_GRAPH_HIGH_LINE = 31
 KEY_GRAPH_LOW_LINE = 32
@@ -390,6 +391,13 @@ def main():
         help="how many minutes ago the meal was recorded (default 45; with --meal)",
     )
     p.add_argument(
+        "--predicted",
+        type=int,
+        metavar="MGDL",
+        help="send KEY_PREDICTED_BG: the sender's forecast 30 minutes ahead, mg/dL; omit to leave "
+             "the projection to the watchface's own extrapolation",
+    )
+    p.add_argument(
         "--screenshot", metavar="PATH", help="grab a screenshot after sending"
     )
     p.add_argument(
@@ -423,6 +431,8 @@ def main():
     if args.meal is not None:
         fields[KEY_MEAL_CARBS] = ("uint", args.meal)
         fields[KEY_MEAL_TIMESTAMP] = ("uint", int(time.time()) - args.meal_ago * 60)
+    if args.predicted is not None:
+        fields[KEY_PREDICTED_BG] = ("uint", args.predicted)
     trend = args.trend if args.trend is not None else preset_trend
     if trend is not None:
         fields[KEY_TREND_ARROW] = ("uint", TREND_ARROWS[trend])
