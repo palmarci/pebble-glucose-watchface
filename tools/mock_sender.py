@@ -60,6 +60,8 @@ KEY_STATUS_STRING = 15
 KEY_STATUS_START = 17
 KEY_STATUS_END = 18
 KEY_PUMP_CONNECTED = 19
+KEY_MEAL_CARBS = 20
+KEY_MEAL_TIMESTAMP = 21
 KEY_GRAPH_DATA = 30
 KEY_GRAPH_HIGH_LINE = 31
 KEY_GRAPH_LOW_LINE = 32
@@ -368,6 +370,19 @@ def main():
              "whenever the pump's reading has no trend field)",
     )
     p.add_argument(
+        "--meal",
+        type=int,
+        metavar="GRAMS",
+        help="send KEY_MEAL_CARBS/KEY_MEAL_TIMESTAMP with this many grams of carbs",
+    )
+    p.add_argument(
+        "--meal-ago",
+        type=int,
+        default=45,
+        metavar="MIN",
+        help="how many minutes ago the meal was recorded (default 45; with --meal)",
+    )
+    p.add_argument(
         "--screenshot", metavar="PATH", help="grab a screenshot after sending"
     )
     p.add_argument(
@@ -398,6 +413,9 @@ def main():
     fields, blob = build_message(points, **kwargs)
     if args.pump_connected is not None:
         fields[KEY_PUMP_CONNECTED] = ("uint", args.pump_connected)
+    if args.meal is not None:
+        fields[KEY_MEAL_CARBS] = ("uint", args.meal)
+        fields[KEY_MEAL_TIMESTAMP] = ("uint", int(time.time()) - args.meal_ago * 60)
     trend = args.trend if args.trend is not None else preset_trend
     if trend is not None:
         fields[KEY_TREND_ARROW] = ("uint", TREND_ARROWS[trend])

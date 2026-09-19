@@ -21,6 +21,7 @@
 #define COLOR_BG_OK     GColorGreen    // within range
 #define COLOR_BG_HIGH   GColorYellow   // above the high line
 #define COLOR_PUMP_OFFLINE GColorRed   // the pump-offline cross
+#define COLOR_MEAL      GColorVividCerulean // the meal fork (white on B&W)
 
 // Graph config
 #define GRAPH_HOURS 2  // Hours of graph data
@@ -134,6 +135,12 @@ static bool s_pump_connected = false;
 // rate-of-change reading. Invalid (no arrow shown) until the sender says otherwise, and whenever a
 // reading arrives with no trend field: the sender omits the key rather than send TREND_UNKNOWN, so
 // "key absent" is the only signal that the arrow should go away.
+// Latest meal (KEY_MEAL_CARBS/KEY_MEAL_TIMESTAMP): a fork mark on the graph at the time it was
+// recorded, with the carb amount beside it, for as long as that time is inside the graph window.
+static bool s_meal_valid = false;
+static uint16_t s_meal_grams = 0;
+static uint32_t s_meal_timestamp = 0;
+
 static bool s_trend_valid = false;
 static uint8_t s_trend_arrow = TREND_UNKNOWN;
 
@@ -656,6 +663,41 @@ static void draw_projection(GContext *ctx, GRect bounds) {
     trend_draw_projection(ctx, bounds, pivot, slope, px_per_min, px_per_wire);
 }
 
+// A fork mark at the meal's time along the bottom of the value band (where the trace rarely goes),
+// with the carbs in grams beside it. Placed on the same time axis as the trace.
+#define MEAL_ICON_H 11
+#define MEAL_TEXT_W 34
+static void draw_meal(GContext *ctx, GRect bounds) {
+    if (!s_meal_valid) {
+        return;
+    }
+    const uint32_t now = time(NULL);
+    const int age_min = now > s_meal_timestamp ? (int)((now - s_meal_timestamp) / 60) : 0;
+    const int graph_minutes = GRAPH_HOURS * 60;
+    if (age_min > graph_minutes) {
+        return;
+    }
+    const int graph_w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
+    const int x = graph_w - (age_min * graph_w) / graph_minutes;
+    const int y = GRAPH_PAD_TOP + s_graph_band_h - MEAL_ICON_H - 2;
+
+    graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(COLOR_MEAL, COLOR_FG));
+    graphics_fill_rect(ctx, GRect(x - 4, y, 2, 5), 0, GCornerNone);     // tines
+    graphics_fill_rect(ctx, GRect(x - 1, y, 2, 5), 0, GCornerNone);
+    graphics_fill_rect(ctx, GRect(x + 2, y, 2, 5), 0, GCornerNone);
+    graphics_fill_rect(ctx, GRect(x - 4, y + 5, 8, 2), 0, GCornerNone); // base
+    graphics_fill_rect(ctx, GRect(x - 1, y + 7, 2, 4), 0, GCornerNone); // handle
+
+    char label[8];
+    snprintf(label, sizeof(label), "%u", (unsigned)s_meal_grams);
+    graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(COLOR_MEAL, COLOR_FG));
+    const bool right = x + 6 + MEAL_TEXT_W <= bounds.size.w;
+    graphics_draw_text(ctx, label, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+                       GRect(right ? x + 6 : x - 6 - MEAL_TEXT_W, y - 3, MEAL_TEXT_W, 16),
+                       GTextOverflowModeTrailingEllipsis, right ? GTextAlignmentLeft : GTextAlignmentRight,
+                       NULL);
+}
+
 // Nothing to plot until the sender has delivered a reading (and, with it, whatever history it has).
 static void draw_no_data(GContext *ctx, GRect bounds) {
     graphics_context_set_text_color(ctx, COLOR_FG);
@@ -673,6 +715,7 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
         return;
     }
     draw_bg_graph(ctx, bounds);
+    draw_meal(ctx, bounds);
     draw_projection(ctx, bounds);
 }
 
@@ -787,6 +830,17 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
         update_trend_indicator();
     }
 
+    // Meal: the sender keeps the latest until a newer one replaces it, so absence means no change.
+    Tuple *meal_tuple = dict_find(iter, KEY_MEAL_CARBS);
+    Tuple *meal_ts_tuple = dict_find(iter, KEY_MEAL_TIMESTAMP);
+    if (meal_tuple && meal_ts_tuple) {
+        s_meal_valid = true;
+        s_meal_grams = meal_tuple->value->uint16;
+        s_meal_timestamp = meal_ts_tuple->value->uint32;
+        if (s_graph_layer)
+            layer_mark_dirty(s_graph_layer);
+    }
+
     // Graph data
     Tuple *graph_tuple = dict_find(iter, KEY_GRAPH_DATA);
     if (graph_tuple && parse_graph_blob(graph_tuple->value->data, graph_tuple->length)) {
@@ -825,7 +879,7 @@ static void send_capability_announcement(void) {
     }
     dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
     dict_write_uint32(iter, KEY_CAPABILITIES,
-                      CAP_BG | CAP_IOB | CAP_STATUS | CAP_PUMP_CONNECTED | CAP_TREND_ARROW);
+                      CAP_BG | CAP_IOB | CAP_STATUS | CAP_PUMP_CONNECTED | CAP_TREND_ARROW | CAP_MEAL);
     dict_write_uint8(iter, KEY_GRAPH_HOURS, GRAPH_HOURS);
     if (app_message_outbox_send() != APP_MSG_OK) {
         APP_LOG(APP_LOG_LEVEL_ERROR, "outbox_send failed");
