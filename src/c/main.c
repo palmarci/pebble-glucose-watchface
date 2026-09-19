@@ -36,9 +36,6 @@
 // and the phone status-bar icon go stale at the same time.
 #define STALE_MINUTES 15
 
-// persist_write_data caps at 256 B/key (uint16 offsets -> 128 points); a larger graph isn't
-// persisted — the senders's ready-ping resend refills it.
-#define PERSIST_MAX_POINTS 128
 // Fixed y-axis 2.2–16 mmol/L, in "mg/dL / 2" wire units (40..288 mg/dL). Out-of-range clamps to edge.
 #define GRAPH_VALUE_MIN 20
 #define GRAPH_VALUE_MAX 144
@@ -88,22 +85,6 @@
 // Vertical padding at the top and bottom so the content does not hug the bezel edge.
 #define LAYOUT_TOP_GAP    12
 #define LAYOUT_BOTTOM_GAP 6
-
-// Persistent-storage keys (survive watchface unload and watch reboot). Separate namespace from the
-// AppMessage keys in protocol.h. Leaving the watchface for the menu and returning relaunches the app,
-// which would otherwise reset the in-RAM graph to empty; we save on unload and reload on launch.
-#define PERSIST_BG_STRING 1
-#define PERSIST_BG_TIMESTAMP 2
-#define PERSIST_IOB_STRING 3
-#define PERSIST_STATUS_STRING 4
-#define PERSIST_STATUS_START 5
-#define PERSIST_STATUS_END 6
-#define PERSIST_GRAPH_REF 7
-#define PERSIST_GRAPH_COUNT 8
-#define PERSIST_GRAPH_OFFSETS 9
-#define PERSIST_GRAPH_VALUES 10
-#define PERSIST_GRAPH_HIGH 11
-#define PERSIST_GRAPH_LOW 12
 
 // Status strip: a full-width opaque white band hugging the status text, sitting low over the graph so
 // its uppercase letters land ~2px above the time. Custom-drawn (not a TextLayer background) so the
@@ -675,10 +656,22 @@ static void draw_projection(GContext *ctx, GRect bounds) {
     trend_draw_projection(ctx, bounds, pivot, slope, px_per_min, px_per_wire);
 }
 
+// Nothing to plot until the sender has delivered a reading (and, with it, whatever history it has).
+static void draw_no_data(GContext *ctx, GRect bounds) {
+    graphics_context_set_text_color(ctx, COLOR_FG);
+    const GRect box = GRect(0, (bounds.size.h - 28) / 2, bounds.size.w, 28);
+    graphics_draw_text(ctx, "No data", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), box,
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+}
+
 // Axes behind the trace, projection on top of both.
 static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     const GRect bounds = layer_get_bounds(layer);
     draw_graph_axes(ctx, bounds);
+    if (!has_reading()) {
+        draw_no_data(ctx, bounds);
+        return;
+    }
     draw_bg_graph(ctx, bounds);
     draw_projection(ctx, bounds);
 }
@@ -708,60 +701,6 @@ static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     // TODO: Consider if this is worth it, probably eats some battery
     if (s_graph_layer)
         layer_mark_dirty(s_graph_layer); // trace scrolls and the projection goes stale together
-}
-
-// Persist the current reading + graph so relaunching the watchface (e.g. after the menu) shows it
-// immediately instead of an empty graph. Called on unload; the phone also re-sends on the ready ping.
-static void save_state(void) {
-    persist_write_string(PERSIST_BG_STRING, s_bg_string);
-    persist_write_int(PERSIST_BG_TIMESTAMP, (int32_t)s_bg_timestamp);
-    persist_write_string(PERSIST_IOB_STRING, s_iob_string);
-    persist_write_string(PERSIST_STATUS_STRING, s_status_string);
-    persist_write_int(PERSIST_STATUS_START, (uint32_t)s_status_start);
-    persist_write_int(PERSIST_STATUS_END, (uint32_t)s_status_end);
-    persist_write_int(PERSIST_GRAPH_REF, (int32_t)s_graph_ref_timestamp);
-    persist_write_int(PERSIST_GRAPH_HIGH, s_graph_high_line);
-    persist_write_int(PERSIST_GRAPH_LOW, s_graph_low_line);
-    // persist_write_data caps at 256 B/key, so only persist reasonably small graphs; a larger one is
-    // left out (COUNT=0) and refilled by the phone's resend on the ready ping after relaunch.
-    if (s_graph_count > 0 && s_graph_count <= PERSIST_MAX_POINTS) {
-        persist_write_int(PERSIST_GRAPH_COUNT, s_graph_count);
-        persist_write_data(PERSIST_GRAPH_OFFSETS, s_graph_offsets, s_graph_count * sizeof(uint16_t));
-        persist_write_data(PERSIST_GRAPH_VALUES, s_graph_bg_values, s_graph_count * sizeof(uint8_t));
-    } else {
-        persist_write_int(PERSIST_GRAPH_COUNT, 0);
-    }
-}
-
-static void load_state(void) {
-    if (persist_exists(PERSIST_BG_STRING))
-        persist_read_string(PERSIST_BG_STRING, s_bg_string, sizeof(s_bg_string));
-    if (persist_exists(PERSIST_BG_TIMESTAMP))
-        s_bg_timestamp = (uint32_t)persist_read_int(PERSIST_BG_TIMESTAMP);
-    if (persist_exists(PERSIST_IOB_STRING))
-        persist_read_string(PERSIST_IOB_STRING, s_iob_string, sizeof(s_iob_string));
-    if (persist_exists(PERSIST_STATUS_STRING))
-        persist_read_string(PERSIST_STATUS_STRING, s_status_string, sizeof(s_status_string));
-    if (persist_exists(PERSIST_STATUS_START))
-        s_status_start = (uint32_t)persist_read_int(PERSIST_STATUS_START);
-    if (persist_exists(PERSIST_STATUS_END))
-        s_status_end = (uint32_t)persist_read_int(PERSIST_STATUS_END);
-    if (persist_exists(PERSIST_GRAPH_HIGH))
-        s_graph_high_line = (uint8_t)persist_read_int(PERSIST_GRAPH_HIGH);
-    if (persist_exists(PERSIST_GRAPH_LOW))
-        s_graph_low_line = (uint8_t)persist_read_int(PERSIST_GRAPH_LOW);
-    if (persist_exists(PERSIST_GRAPH_COUNT) && persist_exists(PERSIST_GRAPH_OFFSETS) &&
-        persist_exists(PERSIST_GRAPH_VALUES)) {
-        uint16_t count = (uint16_t)persist_read_int(PERSIST_GRAPH_COUNT);
-        if (count > MAX_GRAPH_POINTS)
-            count = MAX_GRAPH_POINTS;
-        if (count > 0) {
-            persist_read_data(PERSIST_GRAPH_OFFSETS, s_graph_offsets, count * sizeof(uint16_t));
-            persist_read_data(PERSIST_GRAPH_VALUES, s_graph_bg_values, count * sizeof(uint8_t));
-            s_graph_ref_timestamp = (uint32_t)persist_read_int(PERSIST_GRAPH_REF);
-            s_graph_count = count;
-        }
-    }
 }
 
 // Graph wire format: [ref_ts u32 LE][count u16 LE][offset_min u16 LE ×n][bg u8 ×n]. Returns false and
@@ -868,6 +807,8 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
             s_graph_count);
     update_bg_display();
     update_ago_display();
+    if (bg_tuple && s_graph_layer)
+        layer_mark_dirty(s_graph_layer); // the first reading replaces the "No data" screen
 }
 
 static void inbox_dropped_callback(AppMessageResult reason, void *context) {
@@ -1079,7 +1020,12 @@ static void window_unload(Window *window) {
 }
 
 static void init(void) {
-    load_state(); // restore last reading + graph so a relaunch renders immediately, not empty
+    // Nothing is stored across launches or reboots: the sender re-sends its whole state when the
+    // watchface announces itself, and until then the screen says so rather than showing old data.
+    // Drop what earlier versions persisted (keys 1-12).
+    for (uint32_t key = 1; key <= 12; key++) {
+        persist_delete(key);
+    }
     app_message_register_inbox_received(handle_dictionary);
     app_message_register_inbox_dropped(inbox_dropped_callback);
     app_message_open(2048, 64); // inbox large enough for the graph byte array (up to 24 h of points)
@@ -1095,7 +1041,6 @@ static void init(void) {
 }
 
 static void deinit(void) {
-    save_state(); // persist before unload so returning from the menu shows the graph, not "---"
     app_message_deregister_callbacks();
     tick_timer_service_unsubscribe();
     connection_service_unsubscribe();
