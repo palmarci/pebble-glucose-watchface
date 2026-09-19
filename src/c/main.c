@@ -683,6 +683,8 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     draw_projection(ctx, bounds);
 }
 
+static void send_capability_announcement(void);
+
 static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     update_time_and_date();
     update_ago_display(); // advances the staleness hint each minute
@@ -690,6 +692,13 @@ static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     // blanks the BG/IOB once they cross STALE_MINUTES.
     update_bg_display();
     update_iob_display();
+
+    // Self-heal a missed push: past the "fresh" window but not yet stale, re-announce every couple
+    // of minutes. The sender answers an announcement with the latest reading, the same nudge that
+    // leaving and re-entering the watchface gives.
+    const int mins = minutes_ago();
+    if (has_reading() && mins >= 6 && mins < STALE_MINUTES && (tick_time->tm_min % 2) == 0)
+        send_capability_announcement();
 
     if (s_status_layer && (s_status_start != 0 || s_status_end != 0))
         layer_mark_dirty(s_status_layer);
