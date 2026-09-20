@@ -47,9 +47,10 @@
 // Don't connect points more than this far apart (a sensor gap draws as a break, not a straight line).
 #define GRAPH_GAP_THRESHOLD_MINUTES 15
 
-// The graph occupies most of the screen width; the small right region shows the extrapolated trend projection
-#define GRAPH_WIDTH_NUM 7 // graph width = screen width * NUM/DEN; the rest is for trend projection
-#define GRAPH_WIDTH_DEN 8
+// The trace covers the left 4/5 of the screen (GRAPH_HOURS of history); the right 1/5 is the same time
+// scale continued for the 30-minute forecast, so the whole width is 2 h 30 min.
+#define GRAPH_WIDTH_NUM 4 // graph width = screen width * NUM/DEN; the rest is for the forecast
+#define GRAPH_WIDTH_DEN 5
 
 // The layer is taller than the value band so a projection leaving a reading near the top or bottom of
 // the range has somewhere to go instead of being clipped away (its length is clamped to the layer, so
@@ -511,6 +512,8 @@ static void update_axis_max(void) {
         if (s_graph_bg_values[i] > peak)
             peak = s_graph_bg_values[i];
     }
+    if (s_pred_valid && s_pred_mgdl / 2 > peak)
+        peak = s_pred_mgdl / 2; // keep the forecast on the graph
     int top = GRAPH_AXIS_DEFAULT_MAX;
     while (top < peak && top < GRAPH_VALUE_MAX)
         top += GRAPH_AXIS_STEP;
@@ -582,11 +585,13 @@ static void draw_graph_axes(GContext *ctx, GRect bounds) {
     graphics_draw_line(ctx, GPoint(0, hi_y), GPoint(width, hi_y));
     graphics_draw_line(ctx, GPoint(0, lo_y), GPoint(width, lo_y));
 
-    // Draw hourly tick marks
+    // Hourly tick marks, counted back from "now" (the right end of the trace); the tick at "now" also
+    // marks where the forecast starts.
     const int tick_length = 5; // Pixel length
     const int half_tick = tick_length / 2;
-    for (int n = 1; n <= GRAPH_HOURS; n++) {
-        const int x = width * n / 3;
+    const int trace_w = width * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
+    for (int n = 0; n < GRAPH_HOURS; n++) {
+        const int x = trace_w - trace_w * n / GRAPH_HOURS;
         graphics_draw_line(ctx, GPoint(x, hi_y - half_tick), GPoint(x, hi_y + half_tick));
         graphics_draw_line(ctx, GPoint(x, lo_y - half_tick), GPoint(x, lo_y + half_tick));
     }
@@ -715,6 +720,22 @@ static void trend_draw_projection(GContext *ctx, GRect bounds, GPoint pivot, flo
     }
 }
 
+// The forecast: dots from the newest reading to the predicted value, ending in a larger dot. Same dot
+// size as the trace so it reads as its continuation.
+#define FORECAST_DOT_SPACING 6
+static void draw_forecast_line(GContext *ctx, GPoint from, GPoint to) {
+    const int dx = to.x - from.x, dy = to.y - from.y;
+    const int len = (int)sqrtf_local((float)(dx * dx + dy * dy));
+    graphics_context_set_fill_color(ctx, COLOR_FG);
+    for (int d = TREND_PROJ_GAP; d < len; d += FORECAST_DOT_SPACING) {
+        const int x = from.x + dx * d / len;
+        const int y = from.y + dy * d / len;
+        graphics_fill_rect(ctx, GRect(x - STROKE_OFFSET, y - STROKE_OFFSET, STROKE_WIDTH, STROKE_WIDTH), 0,
+                           GCornerNone);
+    }
+    graphics_fill_circle(ctx, to, STROKE_WIDTH);
+}
+
 static void draw_projection(GContext *ctx, GRect bounds) {
     // Estimator chosen after a July 2026 soak: the plain last-two-points slope. It's the most responsive
     // and, extended tangent to the trace, matched the eye best. The smoothed alternatives soaked
@@ -751,6 +772,14 @@ static void draw_projection(GContext *ctx, GRect bounds) {
     const float px_per_min = (float)graph_w / graph_minutes;
     const float px_per_wire = (float)s_graph_band_h / (s_axis_max - GRAPH_VALUE_MIN);
     const GPoint pivot = GPoint(newest_x, graph_y(s_graph_bg_values[s_graph_count - 1]));
+    if (s_pred_valid) {
+        // The forecast is a value at a time: PREDICTION_HORIZON_MIN after the reading, on the graph's own
+        // scale, so it ends exactly at the right edge for a fresh reading.
+        const GPoint end = GPoint(newest_x + (int)(PREDICTION_HORIZON_MIN * px_per_min + 0.5f),
+                                  graph_y(s_pred_mgdl / 2));
+        draw_forecast_line(ctx, pivot, end);
+        return;
+    }
     trend_draw_projection(ctx, bounds, pivot, slope, px_per_min, px_per_wire);
 }
 
