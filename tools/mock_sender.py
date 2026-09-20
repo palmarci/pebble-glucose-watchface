@@ -63,6 +63,7 @@ KEY_PUMP_CONNECTED = 19
 KEY_MEAL_CARBS = 20
 KEY_MEAL_TIMESTAMP = 21
 KEY_PREDICTED_BG = 1000
+KEY_IOB_TOTAL_STRING = 1001
 KEY_GRAPH_DATA = 30
 KEY_GRAPH_HIGH_LINE = 31
 KEY_GRAPH_LOW_LINE = 32
@@ -360,6 +361,10 @@ def main():
     )
     p.add_argument("--bg", help="override the BG string (default: newest graph point)")
     p.add_argument("--iob", help="override the IOB string")
+    p.add_argument(
+        "--iob-total",
+        help="send KEY_IOB_TOTAL_STRING (pump IOB plus active basal), shown instead of the IOB",
+    )
     p.add_argument("--status", help="override the status string ('' shows the graph)")
     p.add_argument(
         "--high",
@@ -437,6 +442,8 @@ def main():
         fields[KEY_MEAL_TIMESTAMP] = ("uint", int(time.time()) - args.meal_ago * 60)
     if args.predicted is not None:
         fields[KEY_PREDICTED_BG] = ("uint", args.predicted)
+    if args.iob_total is not None:
+        fields[KEY_IOB_TOTAL_STRING] = ("string", args.iob_total)
     trend = args.trend if args.trend is not None else preset_trend
     if trend is not None:
         fields[KEY_TREND_ARROW] = ("uint", TREND_ARROWS[trend])

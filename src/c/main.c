@@ -136,6 +136,7 @@ static char s_bg_string[16] = "";   // whatever the phone last sent; "" until th
 static uint32_t s_bg_timestamp = 0; // 0 => never received
 
 static char s_iob_string[8] = "";     // raw IOB units from phone, e.g. "2.5"; empty = unknown
+static char s_iob_total_string[8] = ""; // the same plus the basal insulin still active; empty = unknown
 static char s_status_string[20] = ""; // pump status, e.g. "SUSPENDED"; empty = normal
 static uint32_t s_status_start = 0;
 static uint32_t s_status_end = 0;
@@ -321,10 +322,12 @@ static void update_ago_display(void) {
 }
 
 static void update_iob_display(void) {
-    if (s_iob_string[0] == '\0' || is_stale()) {
+    // The total (with basal) replaces the pump's bolus-only figure when the sender provides it.
+    const char *iob = s_iob_total_string[0] != '\0' ? s_iob_total_string : s_iob_string;
+    if (iob[0] == '\0' || is_stale()) {
         s_iob_display[0] = '\0';
     } else {
-        snprintf(s_iob_display, sizeof(s_iob_display), "%sU", s_iob_string);
+        snprintf(s_iob_display, sizeof(s_iob_display), "%sU", iob);
     }
 
     if (s_iob_layer)
@@ -929,6 +932,11 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
         STRCPY(s_iob_string, iob_tuple->value->cstring);
         update_iob_display();
     }
+    Tuple *iob_total_tuple = dict_find(iter, KEY_IOB_TOTAL_STRING);
+    if (iob_total_tuple) {
+        STRCPY(s_iob_total_string, iob_total_tuple->value->cstring);
+        update_iob_display();
+    }
 
     // Pump status
     Tuple *status_tuple = dict_find(iter, KEY_STATUS_STRING);
@@ -1023,7 +1031,7 @@ static void send_capability_announcement(void) {
     dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
     dict_write_uint32(iter, KEY_CAPABILITIES,
                       CAP_BG | CAP_IOB | CAP_STATUS | CAP_PUMP_CONNECTED | CAP_TREND_ARROW | CAP_MEAL |
-                          CAP_PREDICTION);
+                          CAP_PREDICTION | CAP_IOB_TOTAL);
     dict_write_uint8(iter, KEY_GRAPH_HOURS, GRAPH_HOURS);
     if (app_message_outbox_send() != APP_MSG_OK) {
         APP_LOG(APP_LOG_LEVEL_ERROR, "outbox_send failed");
