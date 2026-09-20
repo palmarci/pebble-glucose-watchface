@@ -519,16 +519,20 @@ static void update_axis_max(void) {
 
 // A wire value as mmol/L text: whole numbers bare ("10"), otherwise one decimal ("7.4"). Same
 // conversion constant as the firmware, so it matches the pump's own display.
+static int wire_to_tenths(int wire) {
+    return (wire * 2 * 100000 + 90091) / 180182;
+}
+
 static void format_mmol(char *out, size_t size, int wire) {
-    const int tenths = (wire * 2 * 100000 + 90091) / 180182;
+    const int tenths = wire_to_tenths(wire);
     if (tenths % 10 == 0)
         snprintf(out, size, "%d", tenths / 10);
     else
         snprintf(out, size, "%d.%d", tenths / 10, tenths % 10);
 }
 
-// The window's highest reading, as a tiny number on a black plate so it stays readable over the
-// trace. The only text on the graph.
+// The window's highest reading as a tiny number, no plate so it never hides the trace or the meal
+// marker. The only text on the graph. Ties (by displayed value) go to the newest point.
 #define PEAK_LABEL_W 26
 #define PEAK_LABEL_H 14
 static void draw_peak_label(GContext *ctx, GRect bounds) {
@@ -537,7 +541,7 @@ static void draw_peak_label(GContext *ctx, GRect bounds) {
         return;
     int hi = first;
     for (int i = first; i < s_graph_count; i++) {
-        if (s_graph_bg_values[i] >= s_graph_bg_values[hi])
+        if (wire_to_tenths(s_graph_bg_values[i]) >= wire_to_tenths(s_graph_bg_values[hi]))
             hi = i;
     }
 
@@ -560,8 +564,6 @@ static void draw_peak_label(GContext *ctx, GRect bounds) {
     char text[8];
     format_mmol(text, sizeof(text), s_graph_bg_values[hi]);
     const GRect box = GRect(x - PEAK_LABEL_W / 2, top, PEAK_LABEL_W, PEAK_LABEL_H);
-    graphics_context_set_fill_color(ctx, COLOR_WINDOW_BG);
-    graphics_fill_rect(ctx, box, 0, GCornerNone);
     graphics_context_set_text_color(ctx, COLOR_FG);
     graphics_draw_text(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_14),
                        GRect(box.origin.x, box.origin.y - 3, box.size.w, box.size.h + 3),
