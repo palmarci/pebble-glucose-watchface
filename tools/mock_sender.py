@@ -295,7 +295,11 @@ DEFAULT_PLATFORM = "flint"
 
 
 def pebble_target(use_phone, platform):
-    return ["--phone", "127.0.0.1"] if use_phone else ["--emulator", platform]
+    if use_phone:
+        return ["--phone", "127.0.0.1"]
+    # PEBBLE_EMU_VNC=1 addresses an emulator that was started headless with --vnc; without it
+    # the tool would start a second, windowed one.
+    return ["--emulator", platform] + (["--vnc"] if os.environ.get("PEBBLE_EMU_VNC") else [])
 
 
 def send(fields, blob, use_phone, platform, verbose):
