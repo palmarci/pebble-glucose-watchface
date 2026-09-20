@@ -37,13 +37,23 @@
 // and the phone status-bar icon go stale at the same time.
 #define STALE_MINUTES 15
 
+// The sensor's own display ceiling, mg/dL: at or beyond it the pump stops reporting a number and
+// says "HI", and the sender graphs the reading at the edge it crossed (SG_CEILING_MGDL in PebbleOS
+// minimed_sake_read.c -- a 780G's range is 2.8-22.2 mmol/L). The protocol has no field for the
+// sensor range, so the watchface cannot learn it from the sender; a different CGM sets its own with
+// a "GRAPH_CEILING_MGDL=<mg/dL>" line in local_defines.txt (see wscript).
+#ifndef GRAPH_CEILING_MGDL
+#define GRAPH_CEILING_MGDL 400
+#endif
+
 // Y-axis in "mg/dL / 2" wire units. The bottom is fixed at 2.2 mmol/L. The top follows the data in
-// 2 mmol/L steps between 12 and 16 mmol/L (a normal day gets the most pixels per mmol/L, a high
-// one still fits); anything above 16 clamps to the top edge. See update_axis_max().
+// 2 mmol/L steps, from 12 mmol/L up to the sensor ceiling (a normal day gets the most pixels per
+// mmol/L, a high one still fits whole). Only a reading the sensor itself calls off-scale lands on
+// the top edge, so nothing that has a number is ever cut off. See update_axis_max().
 #define GRAPH_VALUE_MIN 20
-#define GRAPH_VALUE_MAX 144        // 16 mmol/L, the highest the axis goes
-#define GRAPH_AXIS_DEFAULT_MAX 108 // 12 mmol/L, the lowest the top goes
-#define GRAPH_AXIS_STEP 18         // ~2 mmol/L
+#define GRAPH_VALUE_MAX (GRAPH_CEILING_MGDL / 2) // ~22.2 mmol/L, the highest the axis goes
+#define GRAPH_AXIS_DEFAULT_MAX 108               // 12 mmol/L, the lowest the top goes
+#define GRAPH_AXIS_STEP 18                       // ~2 mmol/L
 // Don't connect points more than this far apart (a sensor gap draws as a break, not a straight line).
 #define GRAPH_GAP_THRESHOLD_MINUTES 15
 
@@ -505,7 +515,9 @@ static int first_visible_point(void) {
 }
 
 // Fit the top of the axis to the visible readings: the peak rounded up to the next step, never below
-// GRAPH_AXIS_DEFAULT_MAX or above GRAPH_VALUE_MAX. Must run before anything calls graph_y().
+// GRAPH_AXIS_DEFAULT_MAX or above GRAPH_VALUE_MAX. The last step is short when the ceiling is not a
+// whole number of steps above the default; that one only shows up at an off-scale reading anyway.
+// Must run before anything calls graph_y().
 static void update_axis_max(void) {
     int peak = 0;
     for (int i = first_visible_point(); i < s_graph_count; i++) {
@@ -517,6 +529,8 @@ static void update_axis_max(void) {
     int top = GRAPH_AXIS_DEFAULT_MAX;
     while (top < peak && top < GRAPH_VALUE_MAX)
         top += GRAPH_AXIS_STEP;
+    if (top > GRAPH_VALUE_MAX)
+        top = GRAPH_VALUE_MAX;
     s_axis_max = top;
 }
 
