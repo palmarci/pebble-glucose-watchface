@@ -302,6 +302,21 @@ int cap_offset(const char *font_key);
 // or hypo state changes) can just call this with no arguments and get a frame consistent with
 // whichever of the two changed.
 //
+// On a short screen (168px, the aplite/basalt/diorite/flint/chalk class -- emery/gabbro get 228),
+// the trend row (TREND_ROW_GAP + TREND_ROW_H, 18px) and the hypo band (STATUS_H, 24px) together eat
+// a much bigger share of the vertical budget than on a tall one, and the two can be needed at the
+// same time (a fast-moving reading with a live trend arrow is exactly when the hypo model is most
+// likely to be evaluating). Confirmed on real hardware: with both showing, the graph itself
+// shrinks to an illegible sliver. The pump-provided arrow is supplementary -- the on-graph forecast
+// is the primary trend indicator -- so it's the one that goes on short screens, freeing that space
+// for the graph outright rather than trying to shrink everything a little and fixing nothing.
+static bool prv_should_show_trend_row(void) {
+    if (PBL_DISPLAY_HEIGHT < 200) {
+        return false;
+    }
+    return s_trend_valid && s_trend_arrow != TREND_FLAT && s_trend_arrow != TREND_UNKNOWN;
+}
+
 // The BG value's own box starts at s_caps_top_y - cap_offset(FONT_BG_VALUE), not at s_caps_top_y
 // itself (that's the font's CAP line, used for aligning glyphs, not the box's top edge) -- so its
 // bottom edge is (s_caps_top_y - cap_offset(FONT_BG_VALUE)) + BG_ROW_H. Anchoring the graph's top
@@ -312,7 +327,7 @@ static void prv_layout_graph(void) {
     if (!s_graph_layer) {
         return;
     }
-    const bool show_trend_row = s_trend_valid && s_trend_arrow != TREND_FLAT && s_trend_arrow != TREND_UNKNOWN;
+    const bool show_trend_row = prv_should_show_trend_row();
     const bool show_status = s_hypo_valid || s_status_string[0] != '\0';
 
     const int bg_bottom = (s_caps_top_y - cap_offset(FONT_BG_VALUE)) + BG_ROW_H;
@@ -334,7 +349,7 @@ static void update_bg_trend_layout(void) {
     }
     // BG value's own font/frame never change (see FONT_BG_VALUE's comment) -- only the trend row
     // below it, and the graph's top edge, move.
-    const bool show_trend_row = s_trend_valid && s_trend_arrow != TREND_FLAT && s_trend_arrow != TREND_UNKNOWN;
+    const bool show_trend_row = prv_should_show_trend_row();
     const int y = s_caps_top_y - cap_offset(FONT_BG_VALUE);
 
     if (s_trend_row_layer) {
@@ -535,7 +550,14 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
         } else {
             graphics_context_set_text_color(ctx, COLOR_FG);
         }
-        graphics_draw_text(ctx, hypo_text, fonts_get_system_font(STATUS_FONT), band,
+        // graphics_draw_text's vertical position within an oversized box isn't centered -- measured
+        // 2px low here (7px clear above the glyphs, 3px below, in a 21px band), same top-padding-
+        // before-the-glyphs behaviour the peak label already corrects for with its own "-3". Shifts
+        // only the text, not the fill, so the visible band's own edges (and the gap fixed above) are
+        // unaffected -- just where the glyphs sit inside it.
+        const GRect text_box = treat ? GRect(band.origin.x, band.origin.y - 2, band.size.w, band.size.h)
+                                     : band;
+        graphics_draw_text(ctx, hypo_text, fonts_get_system_font(STATUS_FONT), text_box,
                            GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
         return;
     }
@@ -901,21 +923,19 @@ static bool prv_box_crosses_registry(GRect box) {
     return false;
 }
 
-static bool prv_glyph_collides(GRect bounds, GRect box) {
-    if (prv_box_crosses_hline(box, graph_y(s_graph_high_line))) {
-        return true;
-    }
-    if (prv_box_crosses_hline(box, graph_y(s_graph_low_line))) {
-        return true;
-    }
-    if (prv_box_crosses_trace(bounds, box)) {
-        return true;
-    }
-    if (prv_box_crosses_registry(box)) {
-        return true;
-    }
+static bool prv_box_crosses_hlines(GRect box) {
+    return prv_box_crosses_hline(box, graph_y(s_graph_high_line)) ||
+           prv_box_crosses_hline(box, graph_y(s_graph_low_line));
+}
+
+static bool prv_box_crosses_projection(GRect bounds, GRect box) {
     GPoint from, to;
     return prv_projection_line(bounds, &from, &to) && prv_box_crosses_segment(box, from, to);
+}
+
+static bool prv_glyph_collides(GRect bounds, GRect box) {
+    return prv_box_crosses_hlines(box) || prv_box_crosses_trace(bounds, box) ||
+           prv_box_crosses_registry(box) || prv_box_crosses_projection(bounds, box);
 }
 
 static GRect prv_clamp_to_area(GRect area, GRect box) {
@@ -939,18 +959,33 @@ static GRect prv_clamp_to_area(GRect area, GRect box) {
 // started as -- e.g. a "to the right" candidate clamped left on a narrow screen can end up left of
 // its anchor, so comparing the returned box's position back against the anchor is not reliable.
 //
-// Two passes, not one: near a steep peak right next to a meal, every candidate can end up crossing
-// *something* (the trace rises close under all of them), which made the plain "first collision-free
-// one, else give up" version fall straight through to the least-preferred candidate regardless of
-// what it collided with -- often still another glyph, i.e. the exact illegible overlap this exists
-// to prevent. So: first look for a candidate that collides with nothing at all; failing that, prefer
-// one that at least doesn't overlap another glyph (illegible) even if it crosses a line (untidy, but
-// still readable) -- crossing a line is the smaller defect between the two.
+// Three tiers, not one: a plain "first collision-free one, else give up" version falls straight
+// through to the least-preferred candidate regardless of what it collides with whenever every
+// candidate collides with *something* -- which happens more than it sounds, e.g. a peak sitting
+// exactly at the high line (axis_max == high_line, so the peak's own y has nowhere to go but onto
+// the line) or a steep rise right next to a meal. Ranked by how bad the collision actually reads:
+//   1. nothing at all
+//   2. no other glyph AND no threshold line -- may still cross the wandering trace/projection
+//      (a number touching a moving line is easy to misread as "attached to the wrong point"; a
+//      static reference line a user reads directly is worse to sit on than that)
+//   3. no other glyph -- the least readable failure (two overlapping numbers) is still avoided
+//   4. give up, use the first candidate
+// An empty registry (no meals on screen) makes tier 3 trivially satisfied by candidate 0, which is
+// exactly the peak-at-the-high-line case above -- tier 2 exists so that case still finds "below".
 static GRect prv_place_glyph(GRect bounds, GRect clamp_area, const GRect *candidates, int count, int *chosen_out) {
     const GRect fallback = prv_clamp_to_area(clamp_area, candidates[0]);
     for (int i = 0; i < count; i++) {
         const GRect c = prv_clamp_to_area(clamp_area, candidates[i]);
         if (!prv_glyph_collides(bounds, c)) {
+            if (chosen_out) {
+                *chosen_out = i;
+            }
+            return c;
+        }
+    }
+    for (int i = 0; i < count; i++) {
+        const GRect c = prv_clamp_to_area(clamp_area, candidates[i]);
+        if (!prv_box_crosses_registry(c) && !prv_box_crosses_hlines(c)) {
             if (chosen_out) {
                 *chosen_out = i;
             }
