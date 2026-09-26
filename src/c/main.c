@@ -46,11 +46,13 @@
 #define GRAPH_CEILING_MGDL 400
 #endif
 
-// Y-axis in "mg/dL / 2" wire units. The bottom is fixed at 2.2 mmol/L. The top defaults to the high
-// line itself (10 mmol/L unless the phone sets a different one), then follows the data upward in
-// 2 mmol/L steps up to the sensor ceiling (a normal day gets the most pixels per mmol/L, a high one
-// still fits whole). Only a reading the sensor itself calls off-scale lands on the top edge, so
-// nothing that has a number is ever cut off. See update_axis_max().
+// Y-axis in "mg/dL / 2" wire units, symmetric top and bottom: each defaults to its own threshold
+// line (10/4 mmol/L unless the phone sets different ones) and only follows the data past that line,
+// in 2 mmol/L steps, down to 2.2 mmol/L at the bottom or up to the sensor ceiling at the top (an
+// in-range day gets the most pixels per mmol/L; an out-of-range one still fits whole, and the empty
+// space below/above the target range that a fixed 2.2-16 mmol/L band would otherwise always show
+// goes to the trace instead). Only a reading the sensor itself calls off-scale lands right on an
+// edge, so nothing that has a number is ever cut off. See update_axis_max().
 #define GRAPH_VALUE_MIN 20
 #define GRAPH_VALUE_MAX (GRAPH_CEILING_MGDL / 2) // ~22.2 mmol/L, the highest the axis goes
 // The axis defaults to exactly s_graph_high_line (10.0 mmol/L unless the phone overrides it) --
@@ -613,13 +615,14 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
 // Map a BG value (mg/dL / 2) to a y inside the graph layer, clamping to the fixed range. The only place
 // that knows where the value band sits within the layer, so axes, trace and projection cannot disagree.
 static int s_axis_max = GRAPH_AXIS_DEFAULT_MAX; // current top of the y-axis, wire units
+static int s_axis_min = GRAPH_VALUE_MIN;        // current bottom of the y-axis, wire units
 
 static int graph_y(int bg) {
-    if (bg < GRAPH_VALUE_MIN)
-        bg = GRAPH_VALUE_MIN;
+    if (bg < s_axis_min)
+        bg = s_axis_min;
     if (bg > s_axis_max)
         bg = s_axis_max;
-    return GRAPH_PAD_TOP + s_graph_band_h - ((bg - GRAPH_VALUE_MIN) * s_graph_band_h) / (s_axis_max - GRAPH_VALUE_MIN);
+    return GRAPH_PAD_TOP + s_graph_band_h - ((bg - s_axis_min) * s_graph_band_h) / (s_axis_max - s_axis_min);
 }
 
 // Index range of the points inside the visible window (older ones have scrolled off the left edge).
@@ -633,27 +636,41 @@ static int first_visible_point(void) {
     return s_graph_count;
 }
 
-// Fit the top of the axis to the visible readings: it defaults to exactly the high line itself (so
-// the whole box height is used for anything at or under it, instead of always leaving a fixed gap
-// above), then grows in GRAPH_AXIS_STEP increments -- never above GRAPH_VALUE_MAX -- only once a
-// reading (or the forecast) actually exceeds it, so the peak (or the forecast) always lands on
-// screen. The last step is short when the ceiling is not a whole number of steps above the high
-// line; that one only shows up at an off-scale reading anyway. Must run before anything calls
-// graph_y().
+// Fit both ends of the axis to the visible readings, symmetrically: the top defaults to exactly the
+// high line, the bottom to exactly the low line (instead of always leaving a fixed gap of empty
+// space down to GRAPH_VALUE_MIN, most of which never has anything plotted in it on an ordinary day),
+// so the whole box height is used for anything inside the target range. Each end only moves, in
+// GRAPH_AXIS_STEP increments, once a reading (or the forecast) actually exceeds it on that side, so
+// the peak/trough (or the forecast) always lands on screen. The last step at either end is short
+// when the limit isn't a whole number of steps past the line; that only shows up at an off-scale
+// reading anyway. Must run before anything calls graph_y().
 static void update_axis_max(void) {
-    int peak = 0;
+    int peak = 0, trough = GRAPH_VALUE_MAX;
     for (int i = first_visible_point(); i < s_graph_count; i++) {
         if (s_graph_bg_values[i] > peak)
             peak = s_graph_bg_values[i];
+        if (s_graph_bg_values[i] < trough)
+            trough = s_graph_bg_values[i];
     }
-    if (s_pred_valid && s_pred_mgdl / 2 > peak)
-        peak = s_pred_mgdl / 2; // keep the forecast on the graph
+    if (s_pred_valid) {
+        if (s_pred_mgdl / 2 > peak)
+            peak = s_pred_mgdl / 2; // keep the forecast on the graph
+        if (s_pred_mgdl / 2 < trough)
+            trough = s_pred_mgdl / 2;
+    }
     int top = s_graph_high_line;
     while (top < peak && top < GRAPH_VALUE_MAX)
         top += GRAPH_AXIS_STEP;
     if (top > GRAPH_VALUE_MAX)
         top = GRAPH_VALUE_MAX;
     s_axis_max = top;
+
+    int bottom = s_graph_low_line;
+    while (bottom > trough && bottom > GRAPH_VALUE_MIN)
+        bottom -= GRAPH_AXIS_STEP;
+    if (bottom < GRAPH_VALUE_MIN)
+        bottom = GRAPH_VALUE_MIN;
+    s_axis_min = bottom;
 }
 
 // A wire value as mmol/L text: whole numbers bare ("10"), otherwise one decimal ("7.4"). Same
@@ -797,7 +814,7 @@ static bool prv_projection_line(GRect bounds, GPoint *from, GPoint *to) {
     const int graph_minutes = GRAPH_HOURS * 60;
     const int newest_x = graph_w - (age_min * graph_w) / graph_minutes;
     const float px_per_min = (float)graph_w / graph_minutes;
-    const float px_per_wire = (float)s_graph_band_h / (s_axis_max - GRAPH_VALUE_MIN);
+    const float px_per_wire = (float)s_graph_band_h / (s_axis_max - s_axis_min);
     *from = GPoint(newest_x, graph_y(s_graph_bg_values[s_graph_count - 1]));
     if (s_pred_valid) {
         *to = GPoint(newest_x + (int)(PREDICTION_HORIZON_MIN * px_per_min + 0.5f), graph_y(s_pred_mgdl / 2));
@@ -864,10 +881,18 @@ static bool prv_box_crosses_hline(GRect box, int line_y) {
     return line_y >= box.origin.y && line_y <= box.origin.y + box.size.h;
 }
 
+// The trace itself is STROKE_WIDTH px wide, not the single mathematical pixel prv_trace_y_at_x
+// returns, so a candidate whose nearest sampled y is a pixel or two outside the box can still have
+// the stroke's ink land inside it (seen on a narrow screen with a sharp peak, where the "below"
+// candidate's centerline missed by 1px but the 3px-wide stroke still touched the label). Padding the
+// comparison by half the stroke width catches that.
+#define TRACE_STROKE_MARGIN ((STROKE_WIDTH + 1) / 2)
+
 static bool prv_box_crosses_trace(GRect bounds, GRect box) {
     for (int x = box.origin.x; x <= box.origin.x + box.size.w; x += GLYPH_SAMPLE_STEP) {
         int y;
-        if (prv_trace_y_at_x(bounds, x, &y) && y >= box.origin.y && y <= box.origin.y + box.size.h) {
+        if (prv_trace_y_at_x(bounds, x, &y) && y + TRACE_STROKE_MARGIN >= box.origin.y &&
+            y - TRACE_STROKE_MARGIN <= box.origin.y + box.size.h) {
             return true;
         }
     }
@@ -1035,26 +1060,41 @@ static void draw_peak_label(GContext *ctx, GRect bounds) {
     // dead-center over it, which is a much smaller compromise than the alternative of leaving it
     // somewhere it visibly collides with something (a real case: a meal logged minutes before the
     // peak reading puts its label right where the peak label would otherwise go).
-    const int top = y - PEAK_LABEL_GAP - PEAK_LABEL_H, bottom = y + PEAK_LABEL_GAP;
+    // graphics_draw_text needs 3px more headroom than the label's nominal height to center the
+    // glyphs without clipping, drawn above the box's own top edge -- so the candidate boxes below
+    // already include that 3px on top. Otherwise the collision check clears a box the real draw
+    // then overshoots, and the digits end up sitting on whatever was just above it (the trace, on a
+    // sharp peak, since the "below" candidate's gap is only PEAK_LABEL_GAP wide to begin with).
+    const int render_h = PEAK_LABEL_H + 3;
+    const int top = y - PEAK_LABEL_GAP - render_h, bottom = y + PEAK_LABEL_GAP - 3;
+    const int far_bottom = bottom + render_h; // one more label-height below "bottom"; see below
     const int shift = PEAK_LABEL_W;
+    // "top"/"bottom" first (see above); the "far_bottom" trio is a last resort for a peak close
+    // enough to the top of the graph that every "top" candidate clamps down into the high line, AND
+    // sharp enough that "bottom" sits on the trace's own downslope on both sides -- a real
+    // combination on a narrow/short screen (the peak is close to the axis ceiling, and the label is
+    // a large fraction of the available width). One more label-height further down is usually below
+    // both flanks.
     const GRect candidates[] = {
-        GRect(x - PEAK_LABEL_W / 2, top, PEAK_LABEL_W, PEAK_LABEL_H),
-        GRect(x - PEAK_LABEL_W / 2, bottom, PEAK_LABEL_W, PEAK_LABEL_H),
-        GRect(x - PEAK_LABEL_W / 2 - shift, top, PEAK_LABEL_W, PEAK_LABEL_H),
-        GRect(x - PEAK_LABEL_W / 2 + shift, top, PEAK_LABEL_W, PEAK_LABEL_H),
-        GRect(x - PEAK_LABEL_W / 2 - shift, bottom, PEAK_LABEL_W, PEAK_LABEL_H),
-        GRect(x - PEAK_LABEL_W / 2 + shift, bottom, PEAK_LABEL_W, PEAK_LABEL_H),
+        GRect(x - PEAK_LABEL_W / 2, top, PEAK_LABEL_W, render_h),
+        GRect(x - PEAK_LABEL_W / 2, bottom, PEAK_LABEL_W, render_h),
+        GRect(x - PEAK_LABEL_W / 2 - shift, top, PEAK_LABEL_W, render_h),
+        GRect(x - PEAK_LABEL_W / 2 + shift, top, PEAK_LABEL_W, render_h),
+        GRect(x - PEAK_LABEL_W / 2 - shift, bottom, PEAK_LABEL_W, render_h),
+        GRect(x - PEAK_LABEL_W / 2 + shift, bottom, PEAK_LABEL_W, render_h),
+        GRect(x - PEAK_LABEL_W / 2, far_bottom, PEAK_LABEL_W, render_h),
+        GRect(x - PEAK_LABEL_W / 2 - shift, far_bottom, PEAK_LABEL_W, render_h),
+        GRect(x - PEAK_LABEL_W / 2 + shift, far_bottom, PEAK_LABEL_W, render_h),
     };
     const GRect clamp_area = GRect(0, 0, w, bounds.size.h);
     // Text is centered either way, so which candidate won doesn't matter here.
-    const GRect box = prv_place_glyph(bounds, clamp_area, candidates, 6, NULL);
+    const GRect box = prv_place_glyph(bounds, clamp_area, candidates, 9, NULL);
     prv_register_glyph(box); // nothing draws after this yet, but keep the registry complete
 
     char text[8];
     format_mmol(text, sizeof(text), s_graph_bg_values[hi]);
     graphics_context_set_text_color(ctx, COLOR_FG);
-    graphics_draw_text(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-                       GRect(box.origin.x, box.origin.y - 3, box.size.w, box.size.h + 3),
+    graphics_draw_text(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), box,
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
@@ -1184,7 +1224,7 @@ static void draw_projection(GContext *ctx, GRect bounds) {
     const int graph_minutes = GRAPH_HOURS * 60;
     const int newest_x = graph_w - (age_min * graph_w) / graph_minutes;
     const float px_per_min = (float)graph_w / graph_minutes;
-    const float px_per_wire = (float)s_graph_band_h / (s_axis_max - GRAPH_VALUE_MIN);
+    const float px_per_wire = (float)s_graph_band_h / (s_axis_max - s_axis_min);
     const GPoint pivot = GPoint(newest_x, graph_y(s_graph_bg_values[s_graph_count - 1]));
     if (s_pred_valid) {
         // The forecast is a value at a time: PREDICTION_HORIZON_MIN after the reading, on the graph's own
