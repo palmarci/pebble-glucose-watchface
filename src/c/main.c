@@ -46,14 +46,18 @@
 #define GRAPH_CEILING_MGDL 400
 #endif
 
-// Y-axis in "mg/dL / 2" wire units. The bottom is fixed at 2.2 mmol/L. The top follows the data in
-// 2 mmol/L steps, from 12 mmol/L up to the sensor ceiling (a normal day gets the most pixels per
-// mmol/L, a high one still fits whole). Only a reading the sensor itself calls off-scale lands on
-// the top edge, so nothing that has a number is ever cut off. See update_axis_max().
+// Y-axis in "mg/dL / 2" wire units. The bottom is fixed at 2.2 mmol/L. The top defaults to the high
+// line itself (10 mmol/L unless the phone sets a different one), then follows the data upward in
+// 2 mmol/L steps up to the sensor ceiling (a normal day gets the most pixels per mmol/L, a high one
+// still fits whole). Only a reading the sensor itself calls off-scale lands on the top edge, so
+// nothing that has a number is ever cut off. See update_axis_max().
 #define GRAPH_VALUE_MIN 20
 #define GRAPH_VALUE_MAX (GRAPH_CEILING_MGDL / 2) // ~22.2 mmol/L, the highest the axis goes
-#define GRAPH_AXIS_DEFAULT_MAX 108               // 12 mmol/L, the lowest the top goes
-#define GRAPH_AXIS_STEP 18                       // ~2 mmol/L
+// The axis defaults to exactly s_graph_high_line (10.0 mmol/L unless the phone overrides it) --
+// see update_axis_max(). This constant is only the static initializer's fallback, for the one
+// frame before that function has ever run.
+#define GRAPH_AXIS_DEFAULT_MAX 90 // 10.0 mmol/L, matching s_graph_high_line's own default
+#define GRAPH_AXIS_STEP 18        // ~2 mmol/L
 // Don't connect points more than this far apart (a sensor gap draws as a break, not a straight line).
 #define GRAPH_GAP_THRESHOLD_MINUTES 15
 
@@ -555,10 +559,13 @@ static int first_visible_point(void) {
     return s_graph_count;
 }
 
-// Fit the top of the axis to the visible readings: the peak rounded up to the next step, never below
-// GRAPH_AXIS_DEFAULT_MAX or above GRAPH_VALUE_MAX. The last step is short when the ceiling is not a
-// whole number of steps above the default; that one only shows up at an off-scale reading anyway.
-// Must run before anything calls graph_y().
+// Fit the top of the axis to the visible readings: it defaults to exactly the high line itself (so
+// the whole box height is used for anything at or under it, instead of always leaving a fixed gap
+// above), then grows in GRAPH_AXIS_STEP increments -- never above GRAPH_VALUE_MAX -- only once a
+// reading (or the forecast) actually exceeds it, so the peak (or the forecast) always lands on
+// screen. The last step is short when the ceiling is not a whole number of steps above the high
+// line; that one only shows up at an off-scale reading anyway. Must run before anything calls
+// graph_y().
 static void update_axis_max(void) {
     int peak = 0;
     for (int i = first_visible_point(); i < s_graph_count; i++) {
@@ -567,7 +574,7 @@ static void update_axis_max(void) {
     }
     if (s_pred_valid && s_pred_mgdl / 2 > peak)
         peak = s_pred_mgdl / 2; // keep the forecast on the graph
-    int top = GRAPH_AXIS_DEFAULT_MAX;
+    int top = s_graph_high_line;
     while (top < peak && top < GRAPH_VALUE_MAX)
         top += GRAPH_AXIS_STEP;
     if (top > GRAPH_VALUE_MAX)
