@@ -71,6 +71,9 @@
 // it shortens rather than vanishing). Asymmetric: more spare screen below the band than above it.
 #define GRAPH_PAD_TOP 6
 #define GRAPH_PAD_BOTTOM 8
+// A few extra pixels of pure breathing room, on top of the above, between the BG value and the graph
+// and between the graph and the time -- eye candy, not needed for anything to render correctly.
+#define GRAPH_BREATHING_GAP 3
 // Axes, trace and projection all live in one layer, so there is a single coordinate space and the
 // projection pivot cannot drift off the trace. It sits behind the time/BG text, which stay on top.
 
@@ -124,6 +127,7 @@ static TextLayer *s_date_layer;
 static Layer *s_graph_layer; // axes, trace and projection all draw here
 static int s_graph_band_h;   // px the BG value range maps onto; sized to the screen in window_load
 static int s_graph_bottom_y; // fixed once at window_load: just above the time row
+static int s_status_top_y;   // fixed once at window_load: top of the status strip's opaque band
 static Layer *s_pump_layer;  // pump connection indicator: cross while offline, blank while connected
 static Layer *s_trend_row_layer; // pump-provided trend arrow row (KEY_TREND_ARROW); blank when absent
 static int s_caps_top_y; // cap top of the BG value at its normal (small-font) size; set once in window_load
@@ -281,26 +285,41 @@ static GColor prv_bg_color(void) {
 // Pixels from layer top to font cap height (defined near window_load, which is its main user).
 int cap_offset(const char *font_key);
 
-// The graph's frame and value-band height depend on whether the trend row is currently reserving
-// space below the BG value: when there's no trend to show, that space (TREND_ROW_GAP +
-// TREND_ROW_H) is given to the graph instead of sitting blank. s_graph_bottom_y (just above the
-// time row) is fixed once at window_load; only the top edge moves. Called from window_load once,
-// with a guess of "no trend row" (matching s_trend_valid's startup default), and from
-// update_bg_trend_layout every time that visibility actually changes.
+// The graph's frame and value-band height depend on whether the trend row and the status strip are
+// currently showing:
+//
+// - No trend to show: the trend row's space (TREND_ROW_GAP + TREND_ROW_H) is given to the graph's
+//   top instead of sitting blank, same as before.
+// - No status/hypo text to show: the status strip paints an OPAQUE band (status_layer_update_proc)
+//   that would otherwise cover real trace data near the bottom whenever it's active. The value
+//   band now stops clear of that band's footprint (s_graph_bottom_y - s_status_top_y, both fixed
+//   once at window_load) while something is shown there, and falls back to the smaller
+//   GRAPH_PAD_BOTTOM (needed only for the forecast line's own headroom) the rest of the time,
+//   reclaiming the difference for the trace.
+//
+// Reads s_trend_valid/s_trend_arrow and s_hypo_valid/s_status_string directly rather than taking
+// them as parameters, so every call site (window_load, update_bg_trend_layout, and wherever status
+// or hypo state changes) can just call this with no arguments and get a frame consistent with
+// whichever of the two changed.
 //
 // The BG value's own box starts at s_caps_top_y - cap_offset(FONT_BG_VALUE), not at s_caps_top_y
 // itself (that's the font's CAP line, used for aligning glyphs, not the box's top edge) -- so its
 // bottom edge is (s_caps_top_y - cap_offset(FONT_BG_VALUE)) + BG_ROW_H. Anchoring the graph's top
 // on s_caps_top_y + BG_ROW_H directly (as an earlier version of this did) silently overshot by
-// cap_offset(FONT_BG_VALUE) (13 px) in every state, trend row or not.
-static void prv_layout_graph(bool show_trend_row) {
+// cap_offset(FONT_BG_VALUE) (13 px) in every state, trend row or not. GRAPH_BREATHING_GAP is added
+// at both ends on top of all of the above -- pure eye candy, not needed for anything to render.
+static void prv_layout_graph(void) {
     if (!s_graph_layer) {
         return;
     }
+    const bool show_trend_row = s_trend_valid && s_trend_arrow != TREND_FLAT && s_trend_arrow != TREND_UNKNOWN;
+    const bool show_status = s_hypo_valid || s_status_string[0] != '\0';
+
     const int bg_bottom = (s_caps_top_y - cap_offset(FONT_BG_VALUE)) + BG_ROW_H;
-    const int y = bg_bottom + (show_trend_row ? TREND_ROW_GAP + TREND_ROW_H : 0);
-    const int h = s_graph_bottom_y - y;
-    s_graph_band_h = h - GRAPH_PAD_TOP - GRAPH_PAD_BOTTOM;
+    const int y = bg_bottom + (show_trend_row ? TREND_ROW_GAP + TREND_ROW_H : 0) + GRAPH_BREATHING_GAP;
+    const int h = (s_graph_bottom_y - GRAPH_BREATHING_GAP) - y;
+    const int pad_bottom = show_status ? (s_graph_bottom_y - s_status_top_y) : GRAPH_PAD_BOTTOM;
+    s_graph_band_h = h - GRAPH_PAD_TOP - pad_bottom;
     layer_set_frame(s_graph_layer, GRect(0, y, PBL_DISPLAY_WIDTH, h));
     layer_mark_dirty(s_graph_layer);
 }
@@ -326,7 +345,7 @@ static void update_bg_trend_layout(void) {
         }
         layer_mark_dirty(s_trend_row_layer);
     }
-    prv_layout_graph(show_trend_row);
+    prv_layout_graph();
 }
 
 static void update_bg_display(void) {
@@ -478,10 +497,11 @@ static void update_time_and_date(void) {
 }
 
 // The status label overlays the bottom of the graph as an opaque strip, but only when a status is
-// active; otherwise it's hidden so the full graph shows.
+// active; otherwise the graph's own value band grows to reclaim that space -- see prv_layout_graph.
 static void update_status_display(void) {
     if (s_status_layer)
         layer_mark_dirty(s_status_layer);
+    prv_layout_graph();
 }
 
 // Paints only the band + text (when a status is active); everything else stays transparent so the
@@ -1342,6 +1362,7 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
             s_hypo_alert_pending = true;
         if (s_status_layer)
             layer_mark_dirty(s_status_layer);
+        prv_layout_graph(); // s_hypo_valid changed -> the graph's reclaimed bottom space may have too
     }
 
     // Graph data
@@ -1459,6 +1480,9 @@ static void window_load(Window *window) {
     // using the box origin as their y left their caps visibly lower than the BG digits' caps.
     const int top_row_y = caps_top_y - cap_offset(FONT_SECONDARY);
     const int top_row_h = 28;
+    // prv_layout_graph needs this before the graph layer below is created; the status layer itself
+    // is still created in its own block further down, reusing this same value.
+    s_status_top_y = time_caps_y - internal_margin - STATUS_CAP_H - cap_offset(STATUS_FONT) - 3;
 
     // --- Graph ---------------------------------------------------------------
     // Created first so all text draws over it. The value band runs from under the BG value (and its
@@ -1467,11 +1491,11 @@ static void window_load(Window *window) {
     // time.
     {
         s_graph_bottom_y = time_caps_y - internal_margin;
-        // Placeholder frame; prv_layout_graph(false) below sizes it for real, matching s_trend_valid's
-        // startup default of "no trend row" -- update_bg_trend_layout corrects it the moment the
-        // sender's first trend arrow (or its absence) is known.
+        // Placeholder frame; prv_layout_graph below sizes it for real, matching s_trend_valid's and
+        // s_status_string's startup defaults of "nothing to show" -- update_bg_trend_layout and
+        // update_status_display correct it the moment either state is actually known.
         s_graph_layer = make_layer(root, GRect(0, 0, PBL_DISPLAY_WIDTH, 0), graph_layer_update_proc);
-        prv_layout_graph(false);
+        prv_layout_graph();
 
         // add_debug_outline(layer_get_frame(s_graph_layer)); // Debug (entire layer)
         // add_debug_outline(GRect(0, caps_top_y, PBL_DISPLAY_WIDTH, s_graph_band_h)); // Debug (data band only)
@@ -1534,11 +1558,10 @@ static void window_load(Window *window) {
     // its visible cap height, not a usable anchor on its own.) The extra 3px nudges it a little
     // further from the time than the bare formula, on request.
     {
-        const int y = time_caps_y - internal_margin - STATUS_CAP_H - cap_offset(STATUS_FONT) - 3;
-        const int h = STATUS_H;
-        s_status_layer = make_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), status_layer_update_proc);
+        s_status_layer =
+            make_layer(root, GRect(0, s_status_top_y, PBL_DISPLAY_WIDTH, STATUS_H), status_layer_update_proc);
 
-        // add_debug_outline(GRect(0, y, PBL_DISPLAY_WIDTH, h));
+        // add_debug_outline(GRect(0, s_status_top_y, PBL_DISPLAY_WIDTH, STATUS_H));
     }
 
     // --- Date ----------------------------------------------------------------
