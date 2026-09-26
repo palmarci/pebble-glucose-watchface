@@ -648,8 +648,8 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
         layer_mark_dirty(s_graph_layer);
     // KEY_GRAPH_HOURS from the phone is ignored: the visible window is fixed to GRAPH_HOURS.
 
-    APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s (ts=%lu) IOB: %s graph=%d", s_bg_string, s_bg_timestamp, s_iob_string,
-            s_graph_count);
+    APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s (ts=%lu now=%lu) IOB: %s graph=%d", s_bg_string,
+            (unsigned long)s_bg_timestamp, (unsigned long)time(NULL), s_iob_string, s_graph_count);
     update_bg_display();
     update_ago_display();
 }
