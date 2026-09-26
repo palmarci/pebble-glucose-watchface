@@ -287,11 +287,18 @@ int cap_offset(const char *font_key);
 // time row) is fixed once at window_load; only the top edge moves. Called from window_load once,
 // with a guess of "no trend row" (matching s_trend_valid's startup default), and from
 // update_bg_trend_layout every time that visibility actually changes.
+//
+// The BG value's own box starts at s_caps_top_y - cap_offset(FONT_BG_VALUE), not at s_caps_top_y
+// itself (that's the font's CAP line, used for aligning glyphs, not the box's top edge) -- so its
+// bottom edge is (s_caps_top_y - cap_offset(FONT_BG_VALUE)) + BG_ROW_H. Anchoring the graph's top
+// on s_caps_top_y + BG_ROW_H directly (as an earlier version of this did) silently overshot by
+// cap_offset(FONT_BG_VALUE) (13 px) in every state, trend row or not.
 static void prv_layout_graph(bool show_trend_row) {
     if (!s_graph_layer) {
         return;
     }
-    const int y = s_caps_top_y + BG_ROW_H + (show_trend_row ? TREND_ROW_GAP + TREND_ROW_H : 0);
+    const int bg_bottom = (s_caps_top_y - cap_offset(FONT_BG_VALUE)) + BG_ROW_H;
+    const int y = bg_bottom + (show_trend_row ? TREND_ROW_GAP + TREND_ROW_H : 0);
     const int h = s_graph_bottom_y - y;
     s_graph_band_h = h - GRAPH_PAD_TOP - GRAPH_PAD_BOTTOM;
     layer_set_frame(s_graph_layer, GRect(0, y, PBL_DISPLAY_WIDTH, h));
