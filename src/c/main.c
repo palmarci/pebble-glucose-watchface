@@ -857,6 +857,42 @@ static bool prv_box_crosses_segment(GRect box, GPoint a, GPoint b) {
     return false;
 }
 
+// Every glyph box already placed on the graph THIS FRAME, so a later one can avoid overlapping an
+// earlier one, not just a line -- e.g. the meal fork/label and the peak label can otherwise land on
+// top of each other, since neither is a "line" the trace/hline/projection checks above catch.
+// Reset once per redraw (prv_reset_glyph_registry, called from graph_layer_update_proc) and
+// appended to by prv_register_glyph after each marker's final position is chosen.
+#define GLYPH_REGISTRY_MAX 12
+static GRect s_glyph_registry[GLYPH_REGISTRY_MAX];
+static int s_glyph_registry_count;
+
+static void prv_reset_glyph_registry(void) {
+    s_glyph_registry_count = 0;
+}
+
+// Register a box that has already been placed (or is fixed, like the meal fork icon) so later
+// glyphs this frame avoid it too. Silently drops the box past GLYPH_REGISTRY_MAX rather than
+// faulting -- a frame that busy already has bigger legibility problems than one missed check.
+static void prv_register_glyph(GRect box) {
+    if (s_glyph_registry_count < GLYPH_REGISTRY_MAX) {
+        s_glyph_registry[s_glyph_registry_count++] = box;
+    }
+}
+
+static bool prv_boxes_overlap(GRect a, GRect b) {
+    return a.origin.x < b.origin.x + b.size.w && a.origin.x + a.size.w > b.origin.x &&
+           a.origin.y < b.origin.y + b.size.h && a.origin.y + a.size.h > b.origin.y;
+}
+
+static bool prv_box_crosses_registry(GRect box) {
+    for (int i = 0; i < s_glyph_registry_count; i++) {
+        if (prv_boxes_overlap(box, s_glyph_registry[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool prv_glyph_collides(GRect bounds, GRect box) {
     if (prv_box_crosses_hline(box, graph_y(s_graph_high_line))) {
         return true;
@@ -865,6 +901,9 @@ static bool prv_glyph_collides(GRect bounds, GRect box) {
         return true;
     }
     if (prv_box_crosses_trace(bounds, box)) {
+        return true;
+    }
+    if (prv_box_crosses_registry(box)) {
         return true;
     }
     GPoint from, to;
@@ -938,6 +977,7 @@ static void draw_peak_label(GContext *ctx, GRect bounds) {
     const GRect clamp_area = GRect(0, 0, w, bounds.size.h);
     // Text is centered either way, so which candidate won doesn't matter here.
     const GRect box = prv_place_glyph(bounds, clamp_area, candidates, 2, NULL);
+    prv_register_glyph(box); // nothing draws after this yet, but keep the registry complete
 
     char text[8];
     format_mmol(text, sizeof(text), s_graph_bg_values[hi]);
@@ -1116,6 +1156,9 @@ static void draw_one_meal(GContext *ctx, GRect bounds, int x, uint16_t grams, in
     graphics_fill_rect(ctx, GRect(x + 2, y, 2, 5), 0, GCornerNone);
     graphics_fill_rect(ctx, GRect(x - 4, y + 5, 8, 2), 0, GCornerNone); // base
     graphics_fill_rect(ctx, GRect(x - 1, y + 7, 2, 4), 0, GCornerNone); // handle
+    // The icon itself is fixed (see the comment above this function), but it still needs to be in
+    // the registry so a later glyph -- the peak label, most often -- knows to steer around it.
+    prv_register_glyph(GRect(x - 4, y, 8, MEAL_ICON_H));
 
     char label[8];
     snprintf(label, sizeof(label), "%u", (unsigned)grams);
@@ -1128,6 +1171,7 @@ static void draw_one_meal(GContext *ctx, GRect bounds, int x, uint16_t grams, in
     int chosen;
     const GRect box = prv_place_glyph(bounds, clamp_area, candidates, 2, &chosen);
     const bool right = chosen == 0; // candidate 0 is "right of the fork" -- see prv_place_glyph
+    prv_register_glyph(box);
     graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(COLOR_MEAL, COLOR_FG));
     graphics_draw_text(ctx, label, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), box,
                        GTextOverflowModeTrailingEllipsis, right ? GTextAlignmentLeft : GTextAlignmentRight,
@@ -1168,13 +1212,14 @@ static void draw_no_data(GContext *ctx, GRect bounds) {
 static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     const GRect bounds = layer_get_bounds(layer);
     update_axis_max();
+    prv_reset_glyph_registry(); // a fresh frame: forget last redraw's glyph boxes
     draw_graph_axes(ctx, bounds);
     if (!has_reading()) {
         draw_no_data(ctx, bounds);
         return;
     }
     draw_bg_graph(ctx, bounds);
-    draw_meal(ctx, bounds);
+    draw_meal(ctx, bounds); // placed before the peak label so it registers its boxes first
     draw_projection(ctx, bounds);
     draw_peak_label(ctx, bounds);
 }
