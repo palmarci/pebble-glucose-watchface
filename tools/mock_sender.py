@@ -64,6 +64,9 @@ KEY_MEAL_CARBS = 20
 KEY_MEAL_TIMESTAMP = 21
 KEY_PREDICTED_BG = 1000
 KEY_IOB_TOTAL_STRING = 1001
+KEY_HYPO_TREAT_PCT = 1002
+KEY_MEAL_LIST = 1003
+KEY_HYPO_P_LOW_PCT = 1004
 KEY_GRAPH_DATA = 30
 KEY_GRAPH_HIGH_LINE = 31
 KEY_GRAPH_LOW_LINE = 32
@@ -108,6 +111,19 @@ def pack_graph(ref_ts, points):
     blob = struct.pack("<IH", ref_ts, len(points))
     blob += b"".join(struct.pack("<H", off) for off, _ in points)
     blob += bytes(wire for _, wire in points)
+    return blob
+
+
+def pack_meal_list(meals):
+    """[count u8][(timestamp u32 LE)(grams u16 LE) x count] -- KEY_MEAL_LIST's wire format.
+
+    `meals` is [(unix_timestamp, grams)], any order (the real sender keeps this sorted oldest-first,
+    but the watchface's parser doesn't require it and the collision-avoidance test benefits from
+    exercising an unsorted one occasionally).
+    """
+    blob = bytes([len(meals)])
+    for ts, grams in meals:
+        blob += struct.pack("<IH", ts, grams)
     return blob
 
 
@@ -309,7 +325,7 @@ def send(fields, blob, use_phone, platform, verbose):
     cmd = ["pebble", "send-app-message"] + pebble_target(use_phone, platform)
     cmd += ["--app-uuid", app_uuid()]
 
-    for kind in ("uint", "string"):
+    for kind in ("uint", "string", "bytes"):
         pairs = ["%d=%s" % (k, v) for k, (t, v) in sorted(fields.items()) if t == kind]
         if pairs:
             cmd += ["--" + kind] + pairs
@@ -389,15 +405,31 @@ def main():
     p.add_argument(
         "--meal",
         type=int,
+        action="append",
         metavar="GRAMS",
-        help="send KEY_MEAL_CARBS/KEY_MEAL_TIMESTAMP with this many grams of carbs",
+        help="send this meal's carbs, in grams; repeat for more than one (KEY_MEAL_LIST -- the "
+             "newest one also goes out as the legacy KEY_MEAL_CARBS/KEY_MEAL_TIMESTAMP)",
     )
     p.add_argument(
         "--meal-ago",
         type=int,
-        default=45,
+        action="append",
         metavar="MIN",
-        help="how many minutes ago the meal was recorded (default 45; with --meal)",
+        help="how many minutes ago each --meal was recorded, same order, one per --meal "
+             "(default 45 for any --meal past the ones given)",
+    )
+    p.add_argument(
+        "--hypo-treat",
+        type=int,
+        metavar="PCT",
+        help="send KEY_HYPO_TREAT_PCT (0-100): the hypo model's treat-or-wait score",
+    )
+    p.add_argument(
+        "--hypo-plow",
+        type=int,
+        metavar="PCT",
+        help="send KEY_HYPO_P_LOW_PCT (0-100): shown as the confidence number next to the "
+             "TREAT/WATCH decision; defaults to --hypo-treat's value if omitted",
     )
     p.add_argument(
         "--predicted",
@@ -437,11 +469,21 @@ def main():
     fields, blob = build_message(points, **kwargs)
     if args.pump_connected is not None:
         fields[KEY_PUMP_CONNECTED] = ("uint", args.pump_connected)
-    if args.meal is not None:
-        fields[KEY_MEAL_CARBS] = ("uint", args.meal)
-        fields[KEY_MEAL_TIMESTAMP] = ("uint", int(time.time()) - args.meal_ago * 60)
+    if args.meal:
+        agos = list(args.meal_ago or [])
+        agos += [45] * (len(args.meal) - len(agos))  # default 45 min for any without one
+        meals = sorted(
+            (int(time.time()) - ago * 60, grams) for grams, ago in zip(args.meal, agos)
+        )
+        fields[KEY_MEAL_LIST] = ("bytes", pack_meal_list(meals).hex())
+        newest_ts, newest_grams = meals[-1]  # legacy fields, for a watchface that predates the list
+        fields[KEY_MEAL_CARBS] = ("uint", newest_grams)
+        fields[KEY_MEAL_TIMESTAMP] = ("uint", newest_ts)
     if args.predicted is not None:
         fields[KEY_PREDICTED_BG] = ("uint", args.predicted)
+    if args.hypo_treat is not None:
+        fields[KEY_HYPO_TREAT_PCT] = ("uint", args.hypo_treat)
+        fields[KEY_HYPO_P_LOW_PCT] = ("uint", args.hypo_plow if args.hypo_plow is not None else args.hypo_treat)
     if args.iob_total is not None:
         fields[KEY_IOB_TOTAL_STRING] = ("string", args.iob_total)
     trend = args.trend if args.trend is not None else preset_trend

@@ -862,7 +862,7 @@ static bool prv_box_crosses_segment(GRect box, GPoint a, GPoint b) {
 // top of each other, since neither is a "line" the trace/hline/projection checks above catch.
 // Reset once per redraw (prv_reset_glyph_registry, called from graph_layer_update_proc) and
 // appended to by prv_register_glyph after each marker's final position is chosen.
-#define GLYPH_REGISTRY_MAX 12
+#define GLYPH_REGISTRY_MAX 20 // MEAL_LIST_MAX (8) meals x 2 boxes (fork + label) + the peak label, with room
 static GRect s_glyph_registry[GLYPH_REGISTRY_MAX];
 static int s_glyph_registry_count;
 
@@ -930,11 +930,28 @@ static GRect prv_clamp_to_area(GRect area, GRect box) {
 // can move a box far enough that its final position no longer tells the caller which candidate it
 // started as -- e.g. a "to the right" candidate clamped left on a narrow screen can end up left of
 // its anchor, so comparing the returned box's position back against the anchor is not reliable.
+//
+// Two passes, not one: near a steep peak right next to a meal, every candidate can end up crossing
+// *something* (the trace rises close under all of them), which made the plain "first collision-free
+// one, else give up" version fall straight through to the least-preferred candidate regardless of
+// what it collided with -- often still another glyph, i.e. the exact illegible overlap this exists
+// to prevent. So: first look for a candidate that collides with nothing at all; failing that, prefer
+// one that at least doesn't overlap another glyph (illegible) even if it crosses a line (untidy, but
+// still readable) -- crossing a line is the smaller defect between the two.
 static GRect prv_place_glyph(GRect bounds, GRect clamp_area, const GRect *candidates, int count, int *chosen_out) {
     const GRect fallback = prv_clamp_to_area(clamp_area, candidates[0]);
     for (int i = 0; i < count; i++) {
         const GRect c = prv_clamp_to_area(clamp_area, candidates[i]);
         if (!prv_glyph_collides(bounds, c)) {
+            if (chosen_out) {
+                *chosen_out = i;
+            }
+            return c;
+        }
+    }
+    for (int i = 0; i < count; i++) {
+        const GRect c = prv_clamp_to_area(clamp_area, candidates[i]);
+        if (!prv_box_crosses_registry(c)) {
             if (chosen_out) {
                 *chosen_out = i;
             }
@@ -970,13 +987,24 @@ static void draw_peak_label(GContext *ctx, GRect bounds) {
     const int x = w - (mins_ago * w) / (GRAPH_HOURS * 60);
     const int y = graph_y(s_graph_bg_values[hi]);
 
+    // Above/below at the peak's own x first (reads as "pointing at" the peak); only if a meal glyph
+    // or a line blocks both of those does it nudge sideways -- still near the peak, just not
+    // dead-center over it, which is a much smaller compromise than the alternative of leaving it
+    // somewhere it visibly collides with something (a real case: a meal logged minutes before the
+    // peak reading puts its label right where the peak label would otherwise go).
+    const int top = y - PEAK_LABEL_GAP - PEAK_LABEL_H, bottom = y + PEAK_LABEL_GAP;
+    const int shift = PEAK_LABEL_W;
     const GRect candidates[] = {
-        GRect(x - PEAK_LABEL_W / 2, y - PEAK_LABEL_GAP - PEAK_LABEL_H, PEAK_LABEL_W, PEAK_LABEL_H), // above
-        GRect(x - PEAK_LABEL_W / 2, y + PEAK_LABEL_GAP, PEAK_LABEL_W, PEAK_LABEL_H),                // below
+        GRect(x - PEAK_LABEL_W / 2, top, PEAK_LABEL_W, PEAK_LABEL_H),
+        GRect(x - PEAK_LABEL_W / 2, bottom, PEAK_LABEL_W, PEAK_LABEL_H),
+        GRect(x - PEAK_LABEL_W / 2 - shift, top, PEAK_LABEL_W, PEAK_LABEL_H),
+        GRect(x - PEAK_LABEL_W / 2 + shift, top, PEAK_LABEL_W, PEAK_LABEL_H),
+        GRect(x - PEAK_LABEL_W / 2 - shift, bottom, PEAK_LABEL_W, PEAK_LABEL_H),
+        GRect(x - PEAK_LABEL_W / 2 + shift, bottom, PEAK_LABEL_W, PEAK_LABEL_H),
     };
     const GRect clamp_area = GRect(0, 0, w, bounds.size.h);
     // Text is centered either way, so which candidate won doesn't matter here.
-    const GRect box = prv_place_glyph(bounds, clamp_area, candidates, 2, NULL);
+    const GRect box = prv_place_glyph(bounds, clamp_area, candidates, 6, NULL);
     prv_register_glyph(box); // nothing draws after this yet, but keep the registry complete
 
     char text[8];
