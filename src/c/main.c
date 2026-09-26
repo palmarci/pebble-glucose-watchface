@@ -843,6 +843,14 @@ static void window_unload(Window *window) {
     layer_destroy(s_debug_layer);
 }
 
+// Re-announce whenever the window becomes visible again. Returning from a notification or a menu
+// does not relaunch the app, so without this a frame that arrived while the window was covered is
+// never replayed and the display sits stale until the next push. This is also the app's one
+// launch-time announce: load fires before the window is visible, appear right after.
+static void window_appear(Window *window) {
+    send_capability_announcement();
+}
+
 static void init(void) {
     load_state(); // restore last reading + graph so a relaunch renders immediately, not empty
     app_message_register_inbox_received(handle_dictionary);
@@ -853,10 +861,8 @@ static void init(void) {
     connection_service_subscribe((ConnectionHandlers){.pebble_app_connection_handler = bluetooth_callback});
 
     s_window = window_create();
-    window_set_window_handlers(s_window, (WindowHandlers){.load = window_load, .unload = window_unload});
+    window_set_window_handlers(s_window, (WindowHandlers){.load = window_load, .appear = window_appear, .unload = window_unload});
     window_stack_push(s_window, true);
-
-    send_capability_announcement();
 }
 
 static void deinit(void) {
