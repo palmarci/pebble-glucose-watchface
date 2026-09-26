@@ -620,48 +620,9 @@ static void format_mmol(char *out, size_t size, int wire) {
         snprintf(out, size, "%d.%d", tenths / 10, tenths % 10);
 }
 
-// The window's highest reading as a tiny number, no plate so it never hides the trace or the meal
-// marker. The only text on the graph. Ties (by displayed value) go to the newest point.
 #define PEAK_LABEL_W 26
 #define PEAK_LABEL_H 14
-static void draw_peak_label(GContext *ctx, GRect bounds) {
-    const int first = first_visible_point();
-    if (first >= s_graph_count)
-        return;
-    int hi = first;
-    for (int i = first; i < s_graph_count; i++) {
-        if (wire_to_tenths(s_graph_bg_values[i]) >= wire_to_tenths(s_graph_bg_values[hi]))
-            hi = i;
-    }
-
-    const int w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
-    const uint32_t now = time(NULL);
-    const uint32_t pt_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[hi] * 60;
-    const int mins_ago = (int)(((int64_t)now - (int64_t)pt_ts) / 60);
-    int x = w - (mins_ago * w) / (GRAPH_HOURS * 60);
-    if (x < PEAK_LABEL_W / 2)
-        x = PEAK_LABEL_W / 2;
-    if (x > w - PEAK_LABEL_W / 2)
-        x = w - PEAK_LABEL_W / 2;
-
-    // Above its point, or below it when the point is at the top of the band. The gap is bigger than
-    // the trace's own stroke width: a rounded peak's neighbouring points sit at nearly the same y as
-    // the peak itself for a good stretch either side, and PEAK_LABEL_W is wide enough to reach them,
-    // so clearing only the peak's own pixel let the label's bottom edge cross that nearby trace.
-    #define PEAK_LABEL_GAP (STROKE_WIDTH + 4)
-    const int y = graph_y(s_graph_bg_values[hi]);
-    int top = y - PEAK_LABEL_GAP - PEAK_LABEL_H;
-    if (top < 0)
-        top = y + PEAK_LABEL_GAP;
-
-    char text[8];
-    format_mmol(text, sizeof(text), s_graph_bg_values[hi]);
-    const GRect box = GRect(x - PEAK_LABEL_W / 2, top, PEAK_LABEL_W, PEAK_LABEL_H);
-    graphics_context_set_text_color(ctx, COLOR_FG);
-    graphics_draw_text(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-                       GRect(box.origin.x, box.origin.y - 3, box.size.w, box.size.h + 3),
-                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-}
+#define PEAK_LABEL_GAP (STROKE_WIDTH + 4) // clearance from the peak's own point; see draw_peak_label
 
 static void draw_graph_axes(GContext *ctx, GRect bounds) {
     // Explicit fg color: the default stroke color is black, which is invisible on the dark
@@ -756,6 +717,214 @@ static float sqrtf_local(float x) {
     for (int i = 0; i < 20; i++)
         r = 0.5f * (r + x / r);
     return r;
+}
+
+// The forecast/trend line's geometry as a straight chord, for glyph collision purposes only -- good
+// enough even though draw_forecast_curve renders the sender's forecast as a gentle curve, since the
+// curve never strays far from this chord. The no-forecast trend projection's length here is its
+// unclamped TREND_PROJ_GAP + TREND_PROJ_LEN (trend_draw_projection may clamp it shorter to fit the
+// layer), which only makes this a more cautious estimate, never a less cautious one. False when
+// there is currently no line to collide with (stale data, or not enough history yet).
+static bool prv_projection_line(GRect bounds, GPoint *from, GPoint *to) {
+    if (s_graph_count < 1) {
+        return false;
+    }
+    float slope;
+    if (s_pred_valid) {
+        const float newest_wire = (float)s_graph_bg_values[s_graph_count - 1];
+        slope = ((float)s_pred_mgdl / 2.0f - newest_wire) / (float)PREDICTION_HORIZON_MIN;
+    } else if (!trend_slope(&slope)) {
+        return false;
+    }
+    const uint32_t now = time(NULL);
+    const uint32_t newest_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[s_graph_count - 1] * 60;
+    const int age_min = (int)(((int64_t)now - (int64_t)newest_ts) / 60);
+    if (age_min >= STALE_MINUTES) {
+        return false;
+    }
+
+    const int graph_w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
+    const int graph_minutes = GRAPH_HOURS * 60;
+    const int newest_x = graph_w - (age_min * graph_w) / graph_minutes;
+    const float px_per_min = (float)graph_w / graph_minutes;
+    const float px_per_wire = (float)s_graph_band_h / (s_axis_max - GRAPH_VALUE_MIN);
+    *from = GPoint(newest_x, graph_y(s_graph_bg_values[s_graph_count - 1]));
+    if (s_pred_valid) {
+        *to = GPoint(newest_x + (int)(PREDICTION_HORIZON_MIN * px_per_min + 0.5f), graph_y(s_pred_mgdl / 2));
+        return true;
+    }
+    const float vx = px_per_min, vy = -slope * px_per_wire;
+    const float mag = sqrtf_local(vx * vx + vy * vy);
+    if (mag < 1e-6f) {
+        *to = *from;
+        return true;
+    }
+    const float len = TREND_PROJ_GAP + TREND_PROJ_LEN;
+    *to = GPoint(from->x + (int)(vx / mag * len), from->y + (int)(vy / mag * len));
+    return true;
+}
+
+// -- Generic glyph placement ----------------------------------------------------------------------
+//
+// Every marker drawn on the graph (the meal label, the peak label, and any future symbol) is a small
+// rectangle that must not have the BG trace, the high/low lines, or the forecast/trend line passing
+// through it, and must not run off its allotted area. Callers describe a short list of candidate
+// positions, most-preferred first (e.g. "to the right", "to the left"), and prv_place_glyph returns
+// the first one that collides with nothing, clamped inside `clamp_area`. If every candidate
+// collides, the first (still clamped) one is used anyway -- something has to be drawn, and the
+// candidate list should already be ordered by preference, so this is the least-bad fallback, not an
+// arbitrary one.
+#define GLYPH_SAMPLE_STEP 3 // px; granularity of the trace/line collision scan
+
+// The trace's y at a given x, by linear interpolation between the two plotted points either side of
+// it -- the same time-axis mapping draw_bg_graph plots with. False where x falls in a gap wider than
+// GRAPH_GAP_THRESHOLD_MINUTES or outside the plotted range: nothing is actually drawn there to
+// collide with (draw_bg_graph itself only connects points within that gap threshold).
+static bool prv_trace_y_at_x(GRect bounds, int x, int *y_out) {
+    if (s_graph_count == 0) {
+        return false;
+    }
+    const int w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
+    const uint32_t now = time(NULL);
+    const int graph_minutes = GRAPH_HOURS * 60;
+    bool have_prev = false;
+    int prev_x = 0, prev_y = 0, prev_off = 0;
+    for (int i = 0; i < s_graph_count; i++) {
+        const uint32_t pt_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[i] * 60;
+        const int mins_ago = (int)(((int64_t)now - (int64_t)pt_ts) / 60);
+        const int px = w - (mins_ago * w) / graph_minutes;
+        const int py = graph_y(s_graph_bg_values[i]);
+        const bool join_prev = have_prev && (int)s_graph_offsets[i] - prev_off <= GRAPH_GAP_THRESHOLD_MINUTES;
+        if (join_prev) {
+            const int lo = prev_x < px ? prev_x : px, hi = prev_x < px ? px : prev_x;
+            if (x >= lo && x <= hi) {
+                *y_out = (px == prev_x) ? py : prev_y + (int)((int64_t)(py - prev_y) * (x - prev_x) / (px - prev_x));
+                return true;
+            }
+        }
+        have_prev = true;
+        prev_x = px;
+        prev_y = py;
+        prev_off = (int)s_graph_offsets[i];
+    }
+    return false;
+}
+
+static bool prv_box_crosses_hline(GRect box, int line_y) {
+    return line_y >= box.origin.y && line_y <= box.origin.y + box.size.h;
+}
+
+static bool prv_box_crosses_trace(GRect bounds, GRect box) {
+    for (int x = box.origin.x; x <= box.origin.x + box.size.w; x += GLYPH_SAMPLE_STEP) {
+        int y;
+        if (prv_trace_y_at_x(bounds, x, &y) && y >= box.origin.y && y <= box.origin.y + box.size.h) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool prv_box_crosses_segment(GRect box, GPoint a, GPoint b) {
+    const int steps = 12;
+    for (int i = 0; i <= steps; i++) {
+        const int x = a.x + (b.x - a.x) * i / steps;
+        const int y = a.y + (b.y - a.y) * i / steps;
+        if (x >= box.origin.x && x <= box.origin.x + box.size.w && y >= box.origin.y &&
+            y <= box.origin.y + box.size.h) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool prv_glyph_collides(GRect bounds, GRect box) {
+    if (prv_box_crosses_hline(box, graph_y(s_graph_high_line))) {
+        return true;
+    }
+    if (prv_box_crosses_hline(box, graph_y(s_graph_low_line))) {
+        return true;
+    }
+    if (prv_box_crosses_trace(bounds, box)) {
+        return true;
+    }
+    GPoint from, to;
+    return prv_projection_line(bounds, &from, &to) && prv_box_crosses_segment(box, from, to);
+}
+
+static GRect prv_clamp_to_area(GRect area, GRect box) {
+    if (box.origin.x < area.origin.x) {
+        box.origin.x = area.origin.x;
+    }
+    if (box.origin.x + box.size.w > area.origin.x + area.size.w) {
+        box.origin.x = area.origin.x + area.size.w - box.size.w;
+    }
+    if (box.origin.y < area.origin.y) {
+        box.origin.y = area.origin.y;
+    }
+    if (box.origin.y + box.size.h > area.origin.y + area.size.h) {
+        box.origin.y = area.origin.y + area.size.h - box.size.h;
+    }
+    return box;
+}
+
+// `chosen_out` (may be NULL) receives the index of the candidate actually used, since edge-clamping
+// can move a box far enough that its final position no longer tells the caller which candidate it
+// started as -- e.g. a "to the right" candidate clamped left on a narrow screen can end up left of
+// its anchor, so comparing the returned box's position back against the anchor is not reliable.
+static GRect prv_place_glyph(GRect bounds, GRect clamp_area, const GRect *candidates, int count, int *chosen_out) {
+    const GRect fallback = prv_clamp_to_area(clamp_area, candidates[0]);
+    for (int i = 0; i < count; i++) {
+        const GRect c = prv_clamp_to_area(clamp_area, candidates[i]);
+        if (!prv_glyph_collides(bounds, c)) {
+            if (chosen_out) {
+                *chosen_out = i;
+            }
+            return c;
+        }
+    }
+    if (chosen_out) {
+        *chosen_out = 0;
+    }
+    return fallback;
+}
+
+// The window's highest reading as a tiny number, no plate so it never hides the trace or the meal
+// marker. The only text on the graph. Ties (by displayed value) go to the newest point. Candidates
+// are above and below the peak's own point; prv_place_glyph picks whichever one nothing crosses
+// (falling back to "above" if both do) and clamps it to the trace's own width -- the label never
+// belongs in the forecast column, unlike the meal label, which is allowed to reach into it.
+static void draw_peak_label(GContext *ctx, GRect bounds) {
+    const int first = first_visible_point();
+    if (first >= s_graph_count) {
+        return;
+    }
+    int hi = first;
+    for (int i = first; i < s_graph_count; i++) {
+        if (wire_to_tenths(s_graph_bg_values[i]) >= wire_to_tenths(s_graph_bg_values[hi]))
+            hi = i;
+    }
+
+    const int w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
+    const uint32_t now = time(NULL);
+    const uint32_t pt_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[hi] * 60;
+    const int mins_ago = (int)(((int64_t)now - (int64_t)pt_ts) / 60);
+    const int x = w - (mins_ago * w) / (GRAPH_HOURS * 60);
+    const int y = graph_y(s_graph_bg_values[hi]);
+
+    const GRect candidates[] = {
+        GRect(x - PEAK_LABEL_W / 2, y - PEAK_LABEL_GAP - PEAK_LABEL_H, PEAK_LABEL_W, PEAK_LABEL_H), // above
+        GRect(x - PEAK_LABEL_W / 2, y + PEAK_LABEL_GAP, PEAK_LABEL_W, PEAK_LABEL_H),                // below
+    };
+    const GRect clamp_area = GRect(0, 0, w, bounds.size.h);
+    // Text is centered either way, so which candidate won doesn't matter here.
+    const GRect box = prv_place_glyph(bounds, clamp_area, candidates, 2, NULL);
+
+    char text[8];
+    format_mmol(text, sizeof(text), s_graph_bg_values[hi]);
+    graphics_context_set_text_color(ctx, COLOR_FG);
+    graphics_draw_text(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+                       GRect(box.origin.x, box.origin.y - 3, box.size.w, box.size.h + 3),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
 // The projection: a dotted line running from the latest point at the graph's own visual slope. Direction:
@@ -909,9 +1078,12 @@ static void draw_projection(GContext *ctx, GRect bounds) {
 }
 
 // A fork mark at a meal's time along the top of the value band (above almost every reading), with
-// the carbs in grams beside it. Placed on the same time axis as the trace. `row` staggers the
-// label down a line when meals land close enough in x to collide (label only -- the fork itself
-// always sits on the same row, so it still reads as "this time").
+// the carbs in grams beside it. Placed on the same time axis as the trace. The fork icon itself is
+// deliberately NOT placed generically -- it is the "this happened at this time" anchor, and moving
+// it to dodge a line would make it lie about when the meal was logged. Its label has no such
+// constraint, so it goes through prv_place_glyph: `row` still staggers it down a line when meals
+// land close enough in x to collide with each other (a separate concern from line collision), and
+// left-vs-right now also skips a side that the trace, the high/low lines or the forecast cross.
 #define MEAL_ICON_H 11
 #define MEAL_TEXT_W 34
 #define MEAL_ROW_H 12
@@ -927,11 +1099,17 @@ static void draw_one_meal(GContext *ctx, GRect bounds, int x, uint16_t grams, in
 
     char label[8];
     snprintf(label, sizeof(label), "%u", (unsigned)grams);
-    graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(COLOR_MEAL, COLOR_FG));
-    const bool right = x + 6 + MEAL_TEXT_W <= bounds.size.w;
     const int label_y = y - 3 + row * MEAL_ROW_H;
-    graphics_draw_text(ctx, label, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-                       GRect(right ? x + 6 : x - 6 - MEAL_TEXT_W, label_y, MEAL_TEXT_W, 16),
+    const GRect candidates[] = {
+        GRect(x + 6, label_y, MEAL_TEXT_W, 16),               // right of the fork (preferred)
+        GRect(x - 6 - MEAL_TEXT_W, label_y, MEAL_TEXT_W, 16), // left of the fork
+    };
+    const GRect clamp_area = GRect(0, 0, bounds.size.w, bounds.size.h);
+    int chosen;
+    const GRect box = prv_place_glyph(bounds, clamp_area, candidates, 2, &chosen);
+    const bool right = chosen == 0; // candidate 0 is "right of the fork" -- see prv_place_glyph
+    graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(COLOR_MEAL, COLOR_FG));
+    graphics_draw_text(ctx, label, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), box,
                        GTextOverflowModeTrailingEllipsis, right ? GTextAlignmentLeft : GTextAlignmentRight,
                        NULL);
 }
