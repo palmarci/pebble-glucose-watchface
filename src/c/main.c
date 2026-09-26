@@ -151,18 +151,29 @@ static bool s_pump_connected = false;
 // rate-of-change reading. Invalid (no arrow shown) until the sender says otherwise, and whenever a
 // reading arrives with no trend field: the sender omits the key rather than send TREND_UNKNOWN, so
 // "key absent" is the only signal that the arrow should go away.
-// Latest meal (KEY_MEAL_CARBS/KEY_MEAL_TIMESTAMP): a fork mark on the graph at the time it was
-// recorded, with the carb amount beside it, for as long as that time is inside the graph window.
-// The sender's own forecast of the glucose 30 minutes after the newest reading (KEY_PREDICTED_BG).
-// When present it sets the projection's slope; without it the projection extrapolates the last two
-// points.
+// Meals (KEY_MEAL_LIST, falling back to KEY_MEAL_CARBS/KEY_MEAL_TIMESTAMP): a fork mark on the
+// graph at the time each was recorded, with the carb amount beside it, for as long as that time is
+// inside the graph window. The sender's own forecast of the glucose 30 minutes after the newest
+// reading (KEY_PREDICTED_BG). When present it sets the projection's slope; without it the
+// projection extrapolates the last two points.
 #define PREDICTION_HORIZON_MIN 30
 static bool s_pred_valid = false;
 static uint16_t s_pred_mgdl = 0;
 
-static bool s_meal_valid = false;
-static uint16_t s_meal_grams = 0;
-static uint32_t s_meal_timestamp = 0;
+// The hypo (treat-or-wait) model's score for a falling low (KEY_HYPO_TREAT_PCT). Valid only while
+// the sender is in that regime; absence (s_hypo_valid false) means "not applicable", not "zero".
+#define HYPO_TREAT_THRESHOLD 32  // sugar_predictor/INTEGRATION.md's Youden's-J threshold
+static bool s_hypo_valid = false;
+static uint8_t s_hypo_pct = 0;
+// Armed while parsing the dictionary (crossing into the treat band), fired at the very end of
+// handle_dictionary once the BG value, "ago" label and graph have all been updated for this
+// reading -- so the watch never buzzes for a low while still showing the previous, stale value.
+static bool s_hypo_alert_pending = false;
+
+#define MEAL_LIST_MAX 8
+static uint8_t s_meal_count = 0;
+static uint32_t s_meal_ts[MEAL_LIST_MAX];
+static uint16_t s_meal_grams[MEAL_LIST_MAX];
 
 static bool s_trend_valid = false;
 static uint8_t s_trend_arrow = TREND_UNKNOWN;
@@ -444,11 +455,25 @@ static void update_status_display(void) {
 // Paints only the band + text (when a status is active); everything else stays transparent so the
 // graph below shows through. All coords are layer-relative.
 static void status_layer_update_proc(Layer *layer, GContext *ctx) {
-    if (s_status_string[0] == '\0') {
+    const int16_t w = layer_get_bounds(layer).size.w;
+
+    // The hypo (treat-or-wait) banner takes priority over the pump status line: it's the more
+    // urgent, time-sensitive thing to show, and pump status resumes on its own once this clears.
+    // Filled band (unlike the plain pump-status text) so it reads as an alert, not routine status.
+    if (s_hypo_valid && s_hypo_pct >= HYPO_TREAT_THRESHOLD) {
+        char hypo_text[16];
+        snprintf(hypo_text, sizeof(hypo_text), "TREAT %u%%", (unsigned)s_hypo_pct);
+        graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(COLOR_BG_LOW, COLOR_FG));
+        graphics_fill_rect(ctx, GRect(0, 0, w, STATUS_H), 0, GCornerNone);
+        graphics_context_set_text_color(ctx, GColorBlack);
+        graphics_draw_text(ctx, hypo_text, fonts_get_system_font(STATUS_FONT), GRect(0, 0, w, STATUS_H),
+                           GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
         return;
     }
 
-    const int16_t w = layer_get_bounds(layer).size.w;
+    if (s_status_string[0] == '\0') {
+        return;
+    }
 
     char status_with_timer[sizeof(s_status_string) + 6]; // " hh:mm" is 6 chars
 
@@ -575,17 +600,21 @@ static void draw_peak_label(GContext *ctx, GRect bounds) {
     if (x > w - PEAK_LABEL_W / 2)
         x = w - PEAK_LABEL_W / 2;
 
-    // Above its point, or below it when the point is at the top of the band.
+    // Above its point, or below it when the point is at the top of the band. The gap is bigger than
+    // the trace's own stroke width: a rounded peak's neighbouring points sit at nearly the same y as
+    // the peak itself for a good stretch either side, and PEAK_LABEL_W is wide enough to reach them,
+    // so clearing only the peak's own pixel let the label's bottom edge cross that nearby trace.
+    #define PEAK_LABEL_GAP (STROKE_WIDTH + 4)
     const int y = graph_y(s_graph_bg_values[hi]);
-    int top = y - STROKE_WIDTH - PEAK_LABEL_H;
+    int top = y - PEAK_LABEL_GAP - PEAK_LABEL_H;
     if (top < 0)
-        top = y + STROKE_WIDTH;
+        top = y + PEAK_LABEL_GAP;
 
     char text[8];
     format_mmol(text, sizeof(text), s_graph_bg_values[hi]);
     const GRect box = GRect(x - PEAK_LABEL_W / 2, top, PEAK_LABEL_W, PEAK_LABEL_H);
     graphics_context_set_text_color(ctx, COLOR_FG);
-    graphics_draw_text(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_14),
+    graphics_draw_text(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
                        GRect(box.origin.x, box.origin.y - 3, box.size.w, box.size.h + 3),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
@@ -737,18 +766,42 @@ static void trend_draw_projection(GContext *ctx, GRect bounds, GPoint pivot, flo
     }
 }
 
-// The forecast: dots from the newest reading to the predicted value, ending in a larger dot. Same dot
-// size as the trace so it reads as its continuation.
+// The forecast: dots along a smooth curve from the newest reading to the predicted value, ending in
+// a larger dot. Same dot size as the trace so it reads as its continuation. A quadratic Bezier
+// through a control point on the trace's own recent tangent (evaluated at the curve's midpoint x),
+// so the curve leaves the trace smoothly instead of kinking into a straight chord to the forecast.
 #define FORECAST_DOT_SPACING 6
-static void draw_forecast_line(GContext *ctx, GPoint from, GPoint to) {
-    const int dx = to.x - from.x, dy = to.y - from.y;
-    const int len = (int)sqrtf_local((float)(dx * dx + dy * dy));
+#define FORECAST_STEPS 16
+static void draw_forecast_curve(GContext *ctx, GPoint from, GPoint to, float tangent_dydx) {
+    const float cx = (from.x + to.x) / 2.0f;
+    float cy = from.y + tangent_dydx * (cx - from.x);
+    // Clamp the control point: a noisy recent slope must bend the curve, not fling it far outside
+    // the from/to span. (No fabsf: see sqrtf_local's comment on why libm calls are avoided here.)
+    const float span = (float)(to.y > from.y ? to.y - from.y : from.y - to.y) + 20.0f;
+    const float lo = (float)(from.y < to.y ? from.y : to.y) - span;
+    const float hi = (float)(from.y < to.y ? to.y : from.y) + span;
+    if (cy < lo) cy = lo;
+    if (cy > hi) cy = hi;
+
     graphics_context_set_fill_color(ctx, COLOR_FG);
-    for (int d = TREND_PROJ_GAP; d < len; d += FORECAST_DOT_SPACING) {
-        const int x = from.x + dx * d / len;
-        const int y = from.y + dy * d / len;
-        graphics_fill_rect(ctx, GRect(x - STROKE_OFFSET, y - STROKE_OFFSET, STROKE_WIDTH, STROKE_WIDTH), 0,
-                           GCornerNone);
+    GPoint prev = from;
+    float dist_since_dot = 0.0f;
+    for (int i = 1; i <= FORECAST_STEPS; i++) {
+        const float t = (float)i / FORECAST_STEPS;
+        const float mt = 1.0f - t;
+        const float x = mt * mt * from.x + 2.0f * mt * t * cx + t * t * to.x;
+        const float y = mt * mt * from.y + 2.0f * mt * t * cy + t * t * to.y;
+        const GPoint pt = GPoint((int16_t)(x + 0.5f), (int16_t)(y + 0.5f));
+        const int dx = pt.x - prev.x, dy = pt.y - prev.y;
+        dist_since_dot += sqrtf_local((float)(dx * dx + dy * dy));
+        prev = pt;
+        if (i == FORECAST_STEPS)
+            break;  // the end gets its own bigger dot below
+        if (dist_since_dot >= FORECAST_DOT_SPACING) {
+            dist_since_dot = 0.0f;
+            graphics_fill_rect(ctx, GRect(pt.x - STROKE_OFFSET, pt.y - STROKE_OFFSET, STROKE_WIDTH, STROKE_WIDTH), 0,
+                               GCornerNone);
+        }
     }
     graphics_fill_circle(ctx, to, STROKE_WIDTH);
 }
@@ -794,28 +847,31 @@ static void draw_projection(GContext *ctx, GRect bounds) {
         // scale, so it ends exactly at the right edge for a fresh reading.
         const GPoint end = GPoint(newest_x + (int)(PREDICTION_HORIZON_MIN * px_per_min + 0.5f),
                                   graph_y(s_pred_mgdl / 2));
-        draw_forecast_line(ctx, pivot, end);
+        // The curve's starting tangent: the same recent last-two-point slope the no-forecast branch
+        // extrapolates from, so the curve leaves the trace smoothly. Falls back to the straight chord
+        // to `end` (a flat curve, i.e. today's straight line) when there aren't two clean recent points.
+        float recent_slope;
+        float tangent_dydx;
+        if (trend_slope(&recent_slope)) {
+            tangent_dydx = -recent_slope * px_per_wire / px_per_min;
+        } else {
+            const int dx = end.x - pivot.x;
+            tangent_dydx = dx != 0 ? (float)(end.y - pivot.y) / (float)dx : 0.0f;
+        }
+        draw_forecast_curve(ctx, pivot, end, tangent_dydx);
         return;
     }
     trend_draw_projection(ctx, bounds, pivot, slope, px_per_min, px_per_wire);
 }
 
-// A fork mark at the meal's time along the top of the value band (above almost every reading),
-// with the carbs in grams beside it. Placed on the same time axis as the trace.
+// A fork mark at a meal's time along the top of the value band (above almost every reading), with
+// the carbs in grams beside it. Placed on the same time axis as the trace. `row` staggers the
+// label down a line when meals land close enough in x to collide (label only -- the fork itself
+// always sits on the same row, so it still reads as "this time").
 #define MEAL_ICON_H 11
 #define MEAL_TEXT_W 34
-static void draw_meal(GContext *ctx, GRect bounds) {
-    if (!s_meal_valid) {
-        return;
-    }
-    const uint32_t now = time(NULL);
-    const int age_min = now > s_meal_timestamp ? (int)((now - s_meal_timestamp) / 60) : 0;
-    const int graph_minutes = GRAPH_HOURS * 60;
-    if (age_min > graph_minutes) {
-        return;
-    }
-    const int graph_w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
-    const int x = graph_w - (age_min * graph_w) / graph_minutes;
+#define MEAL_ROW_H 12
+static void draw_one_meal(GContext *ctx, GRect bounds, int x, uint16_t grams, int row) {
     const int y = GRAPH_PAD_TOP + 1; // top of the band: the bottom is under the status strip
 
     graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(COLOR_MEAL, COLOR_FG));
@@ -826,13 +882,36 @@ static void draw_meal(GContext *ctx, GRect bounds) {
     graphics_fill_rect(ctx, GRect(x - 1, y + 7, 2, 4), 0, GCornerNone); // handle
 
     char label[8];
-    snprintf(label, sizeof(label), "%u", (unsigned)s_meal_grams);
+    snprintf(label, sizeof(label), "%u", (unsigned)grams);
     graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(COLOR_MEAL, COLOR_FG));
     const bool right = x + 6 + MEAL_TEXT_W <= bounds.size.w;
+    const int label_y = y - 3 + row * MEAL_ROW_H;
     graphics_draw_text(ctx, label, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
-                       GRect(right ? x + 6 : x - 6 - MEAL_TEXT_W, y - 3, MEAL_TEXT_W, 16),
+                       GRect(right ? x + 6 : x - 6 - MEAL_TEXT_W, label_y, MEAL_TEXT_W, 16),
                        GTextOverflowModeTrailingEllipsis, right ? GTextAlignmentLeft : GTextAlignmentRight,
                        NULL);
+}
+
+// Every meal still inside the graph window, oldest first (s_meal_ts is kept sorted by the parser).
+// Consecutive meals whose fork marks would land within one label's width stagger onto the next row
+// so their grams labels don't overlap.
+static void draw_meal(GContext *ctx, GRect bounds) {
+    const uint32_t now = time(NULL);
+    const int graph_minutes = GRAPH_HOURS * 60;
+    const int graph_w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
+
+    int prev_x = -1000;
+    int row = 0;
+    for (uint8_t i = 0; i < s_meal_count; i++) {
+        const int age_min = now > s_meal_ts[i] ? (int)((now - s_meal_ts[i]) / 60) : 0;
+        if (age_min > graph_minutes) {
+            continue;
+        }
+        const int x = graph_w - (age_min * graph_w) / graph_minutes;
+        row = (x - prev_x < MEAL_TEXT_W) ? row + 1 : 0;
+        draw_one_meal(ctx, bounds, x, s_meal_grams[i], row);
+        prev_x = x;
+    }
 }
 
 // Nothing to plot until the sender has delivered a reading (and, with it, whatever history it has).
@@ -911,6 +990,28 @@ static bool parse_graph_blob(const uint8_t *d, uint16_t len) {
     return true;
 }
 
+// Meal list wire format: [count u8][(timestamp u32 LE)(grams u16 LE) x count]. Same
+// validate-before-write discipline as parse_graph_blob. The sender keeps this sorted oldest-first;
+// nothing here depends on that, but draw_meal's stagger logic reads better if it stays that way.
+static bool parse_meal_list_blob(const uint8_t *d, uint16_t len) {
+    if (len < 1) {
+        return false;
+    }
+    uint8_t count = d[0];
+    if (count > MEAL_LIST_MAX)
+        count = MEAL_LIST_MAX;
+    if (len < (uint16_t)(1 + count * 6)) {
+        return false;
+    }
+    for (uint8_t i = 0; i < count; i++) {
+        const uint8_t *p = d + 1 + i * 6;
+        s_meal_ts[i] = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+        s_meal_grams[i] = (uint16_t)(p[4] | (p[5] << 8));
+    }
+    s_meal_count = count;
+    return true;
+}
+
 // Handle a new dictionary of AppMessage keys and values.
 static void handle_dictionary(DictionaryIterator *iter, void *context) {
 
@@ -981,15 +1082,42 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
         s_pred_mgdl = pred_tuple ? pred_tuple->value->uint16 : 0;
     }
 
-    // Meal: the sender keeps the latest until a newer one replaces it, so absence means no change.
-    Tuple *meal_tuple = dict_find(iter, KEY_MEAL_CARBS);
-    Tuple *meal_ts_tuple = dict_find(iter, KEY_MEAL_TIMESTAMP);
-    if (meal_tuple && meal_ts_tuple) {
-        s_meal_valid = true;
-        s_meal_grams = meal_tuple->value->uint16;
-        s_meal_timestamp = meal_ts_tuple->value->uint32;
+    // Meals: KEY_MEAL_LIST (every meal still in the window) takes priority; KEY_MEAL_CARBS/
+    // KEY_MEAL_TIMESTAMP (the newest one only) is the fallback for a sender that predates it.
+    // Either way the sender keeps sending until a change, so absence here means no change.
+    Tuple *meal_list_tuple = dict_find(iter, KEY_MEAL_LIST);
+    if (meal_list_tuple && parse_meal_list_blob(meal_list_tuple->value->data, meal_list_tuple->length)) {
         if (s_graph_layer)
             layer_mark_dirty(s_graph_layer);
+    } else {
+        Tuple *meal_tuple = dict_find(iter, KEY_MEAL_CARBS);
+        Tuple *meal_ts_tuple = dict_find(iter, KEY_MEAL_TIMESTAMP);
+        if (meal_tuple && meal_ts_tuple) {
+            s_meal_count = 1;
+            s_meal_grams[0] = meal_tuple->value->uint16;
+            s_meal_ts[0] = meal_ts_tuple->value->uint32;
+            if (s_graph_layer)
+                layer_mark_dirty(s_graph_layer);
+        }
+    }
+
+    // Hypo (treat-or-wait): like the trend arrow and prediction, sent with a BG push, and its
+    // absence clears the last one -- the reading is no longer in the falling-low regime.
+    // Edge-triggered vibration (armed here, fired at the end of this function): buzz on crossing
+    // INTO the treat band, not on every push while it stays there, and not until the BG value and
+    // graph below have already been updated for this reading -- see s_hypo_alert_pending's comment.
+    if (bg_tuple) {
+        Tuple *hypo_tuple = dict_find(iter, KEY_HYPO_TREAT_PCT);
+        const bool new_valid = (hypo_tuple != NULL);
+        const uint8_t new_pct = hypo_tuple ? hypo_tuple->value->uint8 : 0;
+        const bool was_above = s_hypo_valid && s_hypo_pct >= HYPO_TREAT_THRESHOLD;
+        const bool now_above = new_valid && new_pct >= HYPO_TREAT_THRESHOLD;
+        s_hypo_valid = new_valid;
+        s_hypo_pct = new_pct;
+        if (now_above && !was_above)
+            s_hypo_alert_pending = true;
+        if (s_status_layer)
+            layer_mark_dirty(s_status_layer);
     }
 
     // Graph data
@@ -1014,6 +1142,12 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
     update_ago_display();
     if (bg_tuple && s_graph_layer)
         layer_mark_dirty(s_graph_layer); // the first reading replaces the "No data" screen
+
+    // Fire last, now that the BG value/ago label/graph above are all current for this reading.
+    if (s_hypo_alert_pending) {
+        s_hypo_alert_pending = false;
+        vibes_double_pulse();
+    }
 }
 
 static void inbox_dropped_callback(AppMessageResult reason, void *context) {
@@ -1031,7 +1165,7 @@ static void send_capability_announcement(void) {
     dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
     dict_write_uint32(iter, KEY_CAPABILITIES,
                       CAP_BG | CAP_IOB | CAP_STATUS | CAP_PUMP_CONNECTED | CAP_TREND_ARROW | CAP_MEAL |
-                          CAP_PREDICTION | CAP_IOB_TOTAL);
+                          CAP_PREDICTION | CAP_IOB_TOTAL | CAP_HYPO | CAP_MEAL_LIST);
     dict_write_uint8(iter, KEY_GRAPH_HOURS, GRAPH_HOURS);
     if (app_message_outbox_send() != APP_MSG_OK) {
         APP_LOG(APP_LOG_LEVEL_ERROR, "outbox_send failed");
