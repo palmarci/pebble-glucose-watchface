@@ -123,6 +123,7 @@ static TextLayer *s_time_layer;
 static TextLayer *s_date_layer;
 static Layer *s_graph_layer; // axes, trace and projection all draw here
 static int s_graph_band_h;   // px the BG value range maps onto; sized to the screen in window_load
+static int s_graph_bottom_y; // fixed once at window_load: just above the time row
 static Layer *s_pump_layer;  // pump connection indicator: cross while offline, blank while connected
 static Layer *s_trend_row_layer; // pump-provided trend arrow row (KEY_TREND_ARROW); blank when absent
 static int s_caps_top_y; // cap top of the BG value at its normal (small-font) size; set once in window_load
@@ -280,18 +281,33 @@ static GColor prv_bg_color(void) {
 // Pixels from layer top to font cap height (defined near window_load, which is its main user).
 int cap_offset(const char *font_key);
 
-// Switch the BG value between its normal and "big" font/frame, and show/hide the trend row below
-// it, based on whether there's currently a trend worth a row for. No trend (flat, invalid, or no
-// reading yet): BG grows into FONT_BG_VALUE_BIG to fill the space the row would have used, rather
-// than leaving it blank. This never depends on the BG string's rendered width -- the row is full
-// width and independently centered, so it cannot collide with the ago/IOB corners the way an
-// icon placed beside the digits could.
+// The graph's frame and value-band height depend on whether the trend row is currently reserving
+// space below the BG value: when there's no trend to show, that space (TREND_ROW_GAP +
+// TREND_ROW_H) is given to the graph instead of sitting blank. s_graph_bottom_y (just above the
+// time row) is fixed once at window_load; only the top edge moves. Called from window_load once,
+// with a guess of "no trend row" (matching s_trend_valid's startup default), and from
+// update_bg_trend_layout every time that visibility actually changes.
+static void prv_layout_graph(bool show_trend_row) {
+    if (!s_graph_layer) {
+        return;
+    }
+    const int y = s_caps_top_y + BG_ROW_H + (show_trend_row ? TREND_ROW_GAP + TREND_ROW_H : 0);
+    const int h = s_graph_bottom_y - y;
+    s_graph_band_h = h - GRAPH_PAD_TOP - GRAPH_PAD_BOTTOM;
+    layer_set_frame(s_graph_layer, GRect(0, y, PBL_DISPLAY_WIDTH, h));
+    layer_mark_dirty(s_graph_layer);
+}
+
+// Show/hide the trend row below the BG value, based on whether there's currently a trend worth a
+// row for, and give the graph below whichever space that leaves. This never depends on the BG
+// string's rendered width -- the row is full width and independently centered, so it cannot
+// collide with the ago/IOB corners the way an icon placed beside the digits could.
 static void update_bg_trend_layout(void) {
     if (!s_bg_layer) {
         return;
     }
     // BG value's own font/frame never change (see FONT_BG_VALUE's comment) -- only the trend row
-    // below it shows or hides.
+    // below it, and the graph's top edge, move.
     const bool show_trend_row = s_trend_valid && s_trend_arrow != TREND_FLAT && s_trend_arrow != TREND_UNKNOWN;
     const int y = s_caps_top_y - cap_offset(FONT_BG_VALUE);
 
@@ -303,6 +319,7 @@ static void update_bg_trend_layout(void) {
         }
         layer_mark_dirty(s_trend_row_layer);
     }
+    prv_layout_graph(show_trend_row);
 }
 
 static void update_bg_display(void) {
@@ -1259,17 +1276,19 @@ static void window_load(Window *window) {
     const int top_row_h = 28;
 
     // --- Graph ---------------------------------------------------------------
-    // Created first so all text draws over it. The value band runs from under the BG value and its
-    // trend row to just above the time, so no reading can be drawn over the text, and it grows with
-    // the screen instead of running into the time.
+    // Created first so all text draws over it. The value band runs from under the BG value (and its
+    // trend row, only when one is shown -- see prv_layout_graph) to just above the time, so no
+    // reading can be drawn over the text, and it grows with the screen instead of running into the
+    // time.
     {
-        // Starts under the BG value and its trend row, so no reading can be drawn over the text.
-        const int y = caps_top_y + BG_ROW_H + TREND_ROW_GAP + TREND_ROW_H;
-        const int h = time_caps_y - internal_margin - y;
-        s_graph_band_h = h - GRAPH_PAD_TOP - GRAPH_PAD_BOTTOM;
-        s_graph_layer = make_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), graph_layer_update_proc);
+        s_graph_bottom_y = time_caps_y - internal_margin;
+        // Placeholder frame; prv_layout_graph(false) below sizes it for real, matching s_trend_valid's
+        // startup default of "no trend row" -- update_bg_trend_layout corrects it the moment the
+        // sender's first trend arrow (or its absence) is known.
+        s_graph_layer = make_layer(root, GRect(0, 0, PBL_DISPLAY_WIDTH, 0), graph_layer_update_proc);
+        prv_layout_graph(false);
 
-        // add_debug_outline(GRect(0, y, PBL_DISPLAY_WIDTH, h)); // Debug (entire layer)
+        // add_debug_outline(layer_get_frame(s_graph_layer)); // Debug (entire layer)
         // add_debug_outline(GRect(0, caps_top_y, PBL_DISPLAY_WIDTH, s_graph_band_h)); // Debug (data band only)
     }
 
