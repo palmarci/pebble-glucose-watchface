@@ -520,14 +520,22 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
         char hypo_text[16];
         snprintf(hypo_text, sizeof(hypo_text), "%s %u%%", treat ? "TREAT" : "WATCH",
                  (unsigned)s_hypo_p_low);
+        // The layer's own bottom edge sits flush against the time's cap-top with no gap at all --
+        // fine for the plain pump-status text below (tuned tight on request, see its own comment),
+        // but a solid filled block touching the time digits with zero clearance reads as visually
+        // overlapping them even though it technically isn't. A few px shaved off just the filled
+        // band's own height (not the layer, not the plain-status case) fixes that without giving up
+        // any of the graph space the tight layer height otherwise reclaims.
+        #define TREAT_BAND_BOTTOM_GAP 3
+        const GRect band = treat ? GRect(0, 0, w, STATUS_H - TREAT_BAND_BOTTOM_GAP) : GRect(0, 0, w, STATUS_H);
         if (treat) {
             graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(COLOR_BG_LOW, COLOR_FG));
-            graphics_fill_rect(ctx, GRect(0, 0, w, STATUS_H), 0, GCornerNone);
+            graphics_fill_rect(ctx, band, 0, GCornerNone);
             graphics_context_set_text_color(ctx, GColorBlack);
         } else {
             graphics_context_set_text_color(ctx, COLOR_FG);
         }
-        graphics_draw_text(ctx, hypo_text, fonts_get_system_font(STATUS_FONT), GRect(0, 0, w, STATUS_H),
+        graphics_draw_text(ctx, hypo_text, fonts_get_system_font(STATUS_FONT), band,
                            GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
         return;
     }
@@ -1241,6 +1249,18 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     const GRect bounds = layer_get_bounds(layer);
     update_axis_max();
     prv_reset_glyph_registry(); // a fresh frame: forget last redraw's glyph boxes
+    if (!s_pump_connected && s_pump_layer) {
+        // The pump-offline cross lives in its own layer, outside the graph, but still shares the
+        // same screen region near the graph's top-left corner and can visually collide with a
+        // glyph placed there (confirmed: the peak label, when the peak is near the left edge of the
+        // window, on a narrow display). Register its footprint, translated from root-relative
+        // (layer_get_frame) into this layer's own local coordinates, same as everything else here.
+        const GRect graph_frame = layer_get_frame(layer);
+        const GRect pump_frame = layer_get_frame(s_pump_layer);
+        prv_register_glyph(GRect(pump_frame.origin.x - graph_frame.origin.x,
+                                 pump_frame.origin.y - graph_frame.origin.y, pump_frame.size.w,
+                                 pump_frame.size.h));
+    }
     draw_graph_axes(ctx, bounds);
     if (!has_reading()) {
         draw_no_data(ctx, bounds);
@@ -1502,6 +1522,11 @@ static TextLayer *make_text_layer(Layer *root, GRect frame, const char *font_key
     text_layer_set_text_color(layer, COLOR_FG);
     text_layer_set_font(layer, fonts_get_system_font(font_key));
     text_layer_set_text_alignment(layer, align);
+    // The default is word-wrap: content too wide for one line silently wraps to a second one, which
+    // a box sized for one line then clips vertically -- for the ago/iob corners specifically, that
+    // showed up as the reading's leading digit going missing (".1U" for "2.1U") rather than a visibly
+    // truncated line. Ellipsis keeps it to one line and truncates visibly instead.
+    text_layer_set_overflow_mode(layer, GTextOverflowModeTrailingEllipsis);
     layer_add_child(root, text_layer_get_layer(layer));
     return layer;
 }
@@ -1549,10 +1574,23 @@ static void window_load(Window *window) {
     const int date_y = PBL_DISPLAY_HEIGHT - bottom_gap - edge_margin - 30;
     const int time_y = date_y + cap_offset(FONT_KEY_GOTHIC_24_BOLD) - internal_margin - 42;
     const int time_caps_y = time_y + cap_offset(FONT_TIME);
+    // Right/left-aligned text sits at the box's right/left edge regardless of the box's own width
+    // (as long as it's wide enough not to truncate), so shrinking top_row_w alone cannot buy any
+    // clearance from the centered BG value -- confirmed: it only risks ellipsizing longer content
+    // for no benefit. What actually overlapped the BG value's own digits on a 144px screen
+    // (confirmed: 6.9 vs 1.4U on flint/aplite/basalt/diorite) is FONT_SECONDARY's rendered width at
+    // 28pt; a smaller 24pt clears it by rendering "1.4U"/"45m"-length content narrower, so at the
+    // same right/left-aligned edge its far end sits closer to that edge, away from center.
+    const char *top_row_font = PBL_DISPLAY_WIDTH < 180 ? FONT_KEY_GOTHIC_24_BOLD : FONT_SECONDARY;
     // Ago/IOB cap top matches the BG value's own cap top (caps_top_y), not their box origin --
     // using the box origin as their y left their caps visibly lower than the BG digits' caps.
-    const int top_row_y = caps_top_y - cap_offset(FONT_SECONDARY);
+    const int top_row_y = caps_top_y - cap_offset(top_row_font);
     const int top_row_h = 28;
+    // Widening this only buys clipping headroom on the box's far side from the screen edge -- the
+    // right/left-aligned edge itself is anchored to PBL_DISPLAY_WIDTH regardless (see top_row_font's
+    // comment above). 52px clipped "2.1U" to ".1U" in the worst case (crowded preset, 4-char BG and
+    // a 4-char IOB competing for the same corner on a 144px screen); 60 clears it.
+    const int top_row_w = 60;
     // prv_layout_graph needs this before the graph layer below is created; the status layer itself
     // is still created in its own block further down, reusing this same value.
     s_status_top_y = time_caps_y - internal_margin - STATUS_CAP_H - cap_offset(STATUS_FONT) - 3;
@@ -1585,18 +1623,18 @@ static void window_load(Window *window) {
 
     // --- Time ago ------------------------------------------------------------
     {
-        const int w = 52;
         const int x = PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_WIDTH / 10);
-        s_ago_layer = make_text_layer(root, GRect(x, top_row_y, w, top_row_h), FONT_SECONDARY, GTextAlignmentLeft);
+        s_ago_layer = make_text_layer(root, GRect(x, top_row_y, top_row_w, top_row_h), top_row_font,
+                                      GTextAlignmentLeft);
 
-        // add_debug_outline(GRect(x, top_row_y, w, top_row_h));
+        // add_debug_outline(GRect(x, top_row_y, top_row_w, top_row_h));
     }
 
     // --- Insulin on board ----------------------------------------------------
     {
-        const int w = 52;
-        const int x = PBL_DISPLAY_WIDTH - w - PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_WIDTH / 10);
-        s_iob_layer = make_text_layer(root, GRect(x, top_row_y, w, top_row_h), FONT_SECONDARY, GTextAlignmentRight);
+        const int x = PBL_DISPLAY_WIDTH - top_row_w - PBL_IF_RECT_ELSE(edge_margin, PBL_DISPLAY_WIDTH / 10);
+        s_iob_layer = make_text_layer(root, GRect(x, top_row_y, top_row_w, top_row_h), top_row_font,
+                                      GTextAlignmentRight);
 
         // add_debug_outline(GRect(x, top_row_y, w, top_row_h));
     }
