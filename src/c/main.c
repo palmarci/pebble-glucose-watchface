@@ -160,11 +160,15 @@ static bool s_pump_connected = false;
 static bool s_pred_valid = false;
 static uint16_t s_pred_mgdl = 0;
 
-// The hypo (treat-or-wait) model's score for a falling low (KEY_HYPO_TREAT_PCT). Valid only while
-// the sender is in that regime; absence (s_hypo_valid false) means "not applicable", not "zero".
+// The hypo (treat-or-wait) model's score for a falling low (KEY_HYPO_TREAT_PCT/KEY_HYPO_P_LOW_PCT).
+// Valid only while the sender is in that regime; absence (s_hypo_valid false) means "not
+// applicable", not "zero". treat_pct decides TREAT vs WATCH (it factors in overtreatment risk);
+// p_low is what's shown as the confidence number next to that decision, since "how likely do I
+// need to treat" is a much more direct question than treat_pct answers on its own.
 #define HYPO_TREAT_THRESHOLD 32  // sugar_predictor/INTEGRATION.md's Youden's-J threshold
 static bool s_hypo_valid = false;
 static uint8_t s_hypo_pct = 0;
+static uint8_t s_hypo_p_low = 0;
 // Armed while parsing the dictionary (crossing into the treat band), fired at the very end of
 // handle_dictionary once the BG value, "ago" label and graph have all been updated for this
 // reading -- so the watch never buzzes for a low while still showing the previous, stale value.
@@ -459,13 +463,22 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
 
     // The hypo (treat-or-wait) banner takes priority over the pump status line: it's the more
     // urgent, time-sensitive thing to show, and pump status resumes on its own once this clears.
-    // Filled band (unlike the plain pump-status text) so it reads as an alert, not routine status.
-    if (s_hypo_valid && s_hypo_pct >= HYPO_TREAT_THRESHOLD) {
+    // An explicit decision word (TREAT/WATCH) plus p_low as its confidence number, rather than one
+    // bare percentage: treat_pct alone also folds in overtreatment risk, which reads as ambiguous
+    // ("69%... of what?") on its own. p_low directly answers "how likely do I need to treat".
+    // Filled band only for TREAT (plain text for WATCH) so the display stays calm until it's urgent.
+    if (s_hypo_valid) {
+        const bool treat = s_hypo_pct >= HYPO_TREAT_THRESHOLD;
         char hypo_text[16];
-        snprintf(hypo_text, sizeof(hypo_text), "TREAT %u%%", (unsigned)s_hypo_pct);
-        graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(COLOR_BG_LOW, COLOR_FG));
-        graphics_fill_rect(ctx, GRect(0, 0, w, STATUS_H), 0, GCornerNone);
-        graphics_context_set_text_color(ctx, GColorBlack);
+        snprintf(hypo_text, sizeof(hypo_text), "%s %u%%", treat ? "TREAT" : "WATCH",
+                 (unsigned)s_hypo_p_low);
+        if (treat) {
+            graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(COLOR_BG_LOW, COLOR_FG));
+            graphics_fill_rect(ctx, GRect(0, 0, w, STATUS_H), 0, GCornerNone);
+            graphics_context_set_text_color(ctx, GColorBlack);
+        } else {
+            graphics_context_set_text_color(ctx, COLOR_FG);
+        }
         graphics_draw_text(ctx, hypo_text, fonts_get_system_font(STATUS_FONT), GRect(0, 0, w, STATUS_H),
                            GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
         return;
@@ -1108,12 +1121,14 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
     // graph below have already been updated for this reading -- see s_hypo_alert_pending's comment.
     if (bg_tuple) {
         Tuple *hypo_tuple = dict_find(iter, KEY_HYPO_TREAT_PCT);
+        Tuple *hypo_plow_tuple = dict_find(iter, KEY_HYPO_P_LOW_PCT);
         const bool new_valid = (hypo_tuple != NULL);
         const uint8_t new_pct = hypo_tuple ? hypo_tuple->value->uint8 : 0;
         const bool was_above = s_hypo_valid && s_hypo_pct >= HYPO_TREAT_THRESHOLD;
         const bool now_above = new_valid && new_pct >= HYPO_TREAT_THRESHOLD;
         s_hypo_valid = new_valid;
         s_hypo_pct = new_pct;
+        s_hypo_p_low = hypo_plow_tuple ? hypo_plow_tuple->value->uint8 : 0;
         if (now_above && !was_above)
             s_hypo_alert_pending = true;
         if (s_status_layer)
