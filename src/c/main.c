@@ -1022,6 +1022,11 @@ static GRect prv_clamp_to_area(GRect area, GRect box) {
     return box;
 }
 
+static bool prv_box_within(GRect area, GRect box) {
+    return box.origin.x >= area.origin.x && box.origin.x + box.size.w <= area.origin.x + area.size.w &&
+           box.origin.y >= area.origin.y && box.origin.y + box.size.h <= area.origin.y + area.size.h;
+}
+
 // `chosen_out` (may be NULL) receives the index of the candidate actually used, since edge-clamping
 // can move a box far enough that its final position no longer tells the caller which candidate it
 // started as -- e.g. a "to the right" candidate clamped left on a narrow screen can end up left of
@@ -1110,14 +1115,17 @@ static void draw_peak_label(GContext *ctx, GRect bounds) {
     // sharp peak, since the "below" candidate's gap is only PEAK_LABEL_GAP wide to begin with).
     const int render_h = PEAK_LABEL_H + 3;
     const int top = y - PEAK_LABEL_GAP - render_h, bottom = y + PEAK_LABEL_GAP - 3;
-    const int far_bottom = bottom + render_h; // one more label-height below "bottom"; see below
+    // Half a label-height further down than "bottom" -- enough to clear a smooth curve's local
+    // descent on most peaks, without reading as visually detached from the peak the way a full
+    // extra render_h did (real-hardware report: the label ended up "way down", not close to the
+    // graph). Still a last resort; see below.
+    const int far_bottom = bottom + render_h / 2;
     const int shift = PEAK_LABEL_W;
     // "top"/"bottom" first (see above); the "far_bottom" trio is a last resort for a peak close
     // enough to the top of the graph that every "top" candidate clamps down into the high line, AND
     // sharp enough that "bottom" sits on the trace's own downslope on both sides -- a real
     // combination on a narrow/short screen (the peak is close to the axis ceiling, and the label is
-    // a large fraction of the available width). One more label-height further down is usually below
-    // both flanks.
+    // a large fraction of the available width).
     const GRect candidates[] = {
         GRect(x - PEAK_LABEL_W / 2, top, PEAK_LABEL_W, render_h),
         GRect(x - PEAK_LABEL_W / 2, bottom, PEAK_LABEL_W, render_h),
@@ -1131,8 +1139,15 @@ static void draw_peak_label(GContext *ctx, GRect bounds) {
     };
     const GRect clamp_area = GRect(0, 0, w, bounds.size.h);
     // Text is centered either way, so which candidate won doesn't matter here.
-    const GRect box = prv_place_glyph(bounds, clamp_area, candidates, 9, NULL);
+    int chosen = -1;
+    const GRect box = prv_place_glyph(bounds, clamp_area, candidates, 9, &chosen);
     prv_register_glyph(box); // nothing draws after this yet, but keep the registry complete
+    // chosen >= 6 is the far_bottom fallback -- worth knowing about on its own, since it means
+    // every nearer placement collided with something (see the candidates comment above).
+    if (chosen >= 6) {
+        APP_LOG(APP_LOG_LEVEL_INFO, "peak label: far_bottom fallback (chosen=%d) peak=(%d,%d) box=(%d,%d,%d,%d)",
+                chosen, x, y, box.origin.x, box.origin.y, box.size.w, box.size.h);
+    }
 
     char text[8];
     format_mmol(text, sizeof(text), s_graph_bg_values[hi]);
@@ -1328,8 +1343,32 @@ static void draw_one_meal(GContext *ctx, GRect bounds, int x, uint16_t grams, in
         GRect(x - 6 - MEAL_TEXT_W, label_y, MEAL_TEXT_W, 16), // left of the fork
     };
     const GRect clamp_area = GRect(0, 0, bounds.size.w, bounds.size.h);
-    int chosen;
-    const GRect box = prv_place_glyph(bounds, clamp_area, candidates, 2, &chosen);
+    // The carb number must stay visually attached to its own fork, full stop -- prv_place_glyph's
+    // usual clamp-then-pick can slide an edge-of-screen candidate away from its anchor and still
+    // call it "clean" (the clamped box just happens not to collide with anything, having been
+    // dragged somewhere unrelated to x). So: prefer whichever side needs no clamping at all, even
+    // if it collides with something else; only fall back to the generic (possibly detached)
+    // placement when neither raw side fits on screen, which real screen widths make unreachable.
+    int chosen = -1;
+    GRect box = candidates[0];
+    for (int i = 0; i < 2 && chosen < 0; i++) {
+        if (prv_box_within(clamp_area, candidates[i]) && !prv_glyph_collides(bounds, candidates[i])) {
+            box = candidates[i];
+            chosen = i;
+        }
+    }
+    for (int i = 0; i < 2 && chosen < 0; i++) {
+        if (prv_box_within(clamp_area, candidates[i])) {
+            box = candidates[i];
+            chosen = i;
+        }
+    }
+    if (chosen < 0) {
+        // Neither side fit on screen unclamped -- should not happen at any real screen width; log
+        // it if it ever does, since the label may now be detached from its own fork icon.
+        APP_LOG(APP_LOG_LEVEL_WARNING, "meal label: fell back to clamped placement, x=%d", x);
+        box = prv_place_glyph(bounds, clamp_area, candidates, 2, &chosen);
+    }
     const bool right = chosen == 0; // candidate 0 is "right of the fork" -- see prv_place_glyph
     prv_register_glyph(box);
     graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(COLOR_MEAL, COLOR_FG));
@@ -1571,6 +1610,11 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
         }
         prv_layout_graph();
         send_capability_announcement(); // relay to the firmware right away, not on the next poll
+        APP_LOG(APP_LOG_LEVEL_INFO,
+                "settings applied: alerts(low=%d other=%d) graph=%uh stale=%um hypo(thr=%u%% vibe=%d) "
+                "show(meal=%d hypo=%d pred=%d trend=%d)",
+                s_alerts_low, s_alerts_other, s_graph_hours, s_stale_minutes, s_hypo_treat_threshold,
+                s_hypo_vibrate, s_show_meals, s_show_hypo, s_show_prediction, s_show_trend);
     }
 
     // BG and timestamp
