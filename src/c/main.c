@@ -1441,27 +1441,6 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
 
 static void send_capability_announcement(void);
 
-// Fast-retry ladder right after launch. init() already announces once, but a relaunch (e.g.
-// opening the app menu and pressing back -- every window_stack switch away from this watchface
-// tears the whole process down, per this app's "nothing survives a relaunch" design, see init())
-// races that one announcement against the firmware's "who is the current app" check during the
-// app switch; if it loses, the once-a-minute self-heal in tick_callback is the only other thing
-// that asks again, leaving the screen on "no data"/the pump-disconnected X for up to a full
-// minute after what looked like ordinary navigation. Retry a few times at increasing short
-// delays instead, and stop as soon as a reading answers any of them.
-static const uint32_t LAUNCH_RETRY_DELAYS_MS[] = {1500, 3000, 6000, 12000};
-static uint8_t s_launch_retry_index = 0;
-
-static void launch_retry_cb(void *data) {
-    if (has_reading()) {
-        return; // the initial announce (or an earlier retry) already got answered
-    }
-    send_capability_announcement();
-    if (s_launch_retry_index < ARRAY_LENGTH(LAUNCH_RETRY_DELAYS_MS)) {
-        app_timer_register(LAUNCH_RETRY_DELAYS_MS[s_launch_retry_index++], launch_retry_cb, NULL);
-    }
-}
-
 static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     update_time_and_date();
     update_ago_display(); // advances the staleness hint each minute
@@ -2074,7 +2053,6 @@ static void init(void) {
     window_stack_push(s_window, true);
 
     send_capability_announcement();
-    app_timer_register(LAUNCH_RETRY_DELAYS_MS[s_launch_retry_index++], launch_retry_cb, NULL);
 }
 
 static void deinit(void) {
