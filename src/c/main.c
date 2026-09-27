@@ -24,7 +24,12 @@
 #define COLOR_MEAL      GColorVividCerulean // the meal fork (white on B&W)
 
 // Graph config
-#define GRAPH_HOURS 2  // Hours of graph data
+// Hours of graph data. Phone-configurable (Settings page, GraphHours) since MINIMED_GRAPH_MAX_HOURS
+// firmware-side is 24 and the wire protocol already carries this both ways; s_graph_hours is the
+// live value, GRAPH_HOURS_DEFAULT only the fallback before any config (or persisted value) exists.
+#define GRAPH_HOURS_DEFAULT 2
+static uint8_t s_graph_hours = GRAPH_HOURS_DEFAULT;
+#define GRAPH_TICK_MAX 6 // most hourly ticks to ever draw; see draw_graph_axes
 #define STROKE_WIDTH 3 // Graph stroke width in pixels
 #define STROKE_OFFSET (STROKE_WIDTH / 2)
 #define MAX_GRAPH_POINTS 300 // Enough for 24 h @ 5 min + headroom
@@ -33,9 +38,11 @@
 
 // Show "---" instead of a stale value once the last reading is this old. CGM cadence is 5 min, so
 // keep the last value on screen across a couple of missed readings before giving up on it.
-// MUST match the bridge's STALE_SECONDS (minimed-pebble-bridge BridgeForegroundService) so the watch
-// and the phone status-bar icon go stale at the same time.
-#define STALE_MINUTES 15
+// Defaults to match the bridge's STALE_SECONDS (minimed-pebble-bridge BridgeForegroundService) so
+// the watch and the phone status-bar icon go stale together -- phone-configurable (Settings page,
+// StaleMinutes) for anyone who'd rather trade that agreement for more tolerance of sensor gaps.
+#define STALE_MINUTES_DEFAULT 15
+static uint8_t s_stale_minutes = STALE_MINUTES_DEFAULT;
 
 // The sensor's own display ceiling, mg/dL: at or beyond it the pump stops reporting a number and
 // says "HI", and the sender graphs the reading at the edge it crossed (SG_CEILING_MGDL in PebbleOS
@@ -63,7 +70,7 @@
 // Don't connect points more than this far apart (a sensor gap draws as a break, not a straight line).
 #define GRAPH_GAP_THRESHOLD_MINUTES 15
 
-// The trace covers the left 4/5 of the screen (GRAPH_HOURS of history); the right 1/5 is the same time
+// The trace covers the left 4/5 of the screen (s_graph_hours of history); the right 1/5 is the same time
 // scale continued for the 30-minute forecast, so the whole width is 2 h 30 min.
 #define GRAPH_WIDTH_NUM 4 // graph width = screen width * NUM/DEN; the rest is for the forecast
 #define GRAPH_WIDTH_DEN 5
@@ -176,7 +183,12 @@ static uint16_t s_pred_mgdl = 0;
 // applicable", not "zero". treat_pct decides TREAT vs WATCH (it factors in overtreatment risk);
 // p_low is what's shown as the confidence number next to that decision, since "how likely do I
 // need to treat" is a much more direct question than treat_pct answers on its own.
-#define HYPO_TREAT_THRESHOLD 32  // sugar_predictor/INTEGRATION.md's Youden's-J threshold
+// sugar_predictor/INTEGRATION.md's Youden's-J threshold; phone-configurable (Settings page,
+// HypoTreatThreshold) as a sensitivity knob -- lower catches more real lows at the cost of more
+// false alarms. Leave HYPO_TREAT_THRESHOLD_DEFAULT as the model's own validated value.
+#define HYPO_TREAT_THRESHOLD_DEFAULT 32
+static uint8_t s_hypo_treat_threshold = HYPO_TREAT_THRESHOLD_DEFAULT;
+static bool s_hypo_vibrate = true;  // phone-configurable (Settings page, HypoVibrate)
 static bool s_hypo_valid = false;
 static uint8_t s_hypo_pct = 0;
 static uint8_t s_hypo_p_low = 0;
@@ -184,6 +196,34 @@ static uint8_t s_hypo_p_low = 0;
 // handle_dictionary once the BG value, "ago" label and graph have all been updated for this
 // reading -- so the watch never buzzes for a low while still showing the previous, stale value.
 static bool s_hypo_alert_pending = false;
+
+// Alert popup preference: configured on the phone (Settings page, Clay -- see src/pkjs), relayed
+// to the firmware's annunciation filter in send_capability_announcement(). Persisted, unlike
+// everything else in this app (see init()'s comment on that), because it is user intent rather
+// than data the sender re-supplies on every launch -- there is no "sender" to ask; the firmware
+// falls back to its own last-known/default value until this watchapp announces again.
+#define PERSIST_KEY_ALERTS_LOW 20   // outside the legacy 1-12 range init() wipes on every launch
+#define PERSIST_KEY_ALERTS_OTHER 21
+static bool s_alerts_low = true;   // matches the firmware's own default (issue #15)
+static bool s_alerts_other = false;
+
+// Same phone-configured, persisted pattern as the alert prefs above.
+#define PERSIST_KEY_GRAPH_HOURS 22
+#define PERSIST_KEY_STALE_MINUTES 23
+#define PERSIST_KEY_HYPO_TREAT_THRESHOLD 24
+#define PERSIST_KEY_HYPO_VIBRATE 25
+#define PERSIST_KEY_SHOW_MEALS 26
+#define PERSIST_KEY_SHOW_HYPO 27
+#define PERSIST_KEY_SHOW_PREDICTION 28
+#define PERSIST_KEY_SHOW_TREND 29
+
+// Feature toggles: whether to ask the sender for this data at all (send_capability_announcement)
+// and show it if it arrives anyway (an in-flight push from before the toggle changed). All default
+// on -- these hide existing features, not opt into new ones.
+static bool s_show_meals = true;
+static bool s_show_hypo = true;
+static bool s_show_prediction = true;
+static bool s_show_trend = true;
 
 #define MEAL_LIST_MAX 8
 static uint8_t s_meal_count = 0;
@@ -265,9 +305,9 @@ static int minutes_ago(void) {
     return secs < 0 ? 0 : secs / 60;
 }
 
-// True once the current reading is too old to trust (no fresh push for STALE_MINUTES). During a pump
+// True once the current reading is too old to trust (no fresh push for s_stale_minutes minutes). During a pump
 // outage no message arrives to clear the display, so this is re-evaluated from the minute tick.
-static bool is_stale(void) { return has_reading() && minutes_ago() >= STALE_MINUTES; }
+static bool is_stale(void) { return has_reading() && minutes_ago() >= s_stale_minutes; }
 
 // Map the latest BG (mg/dL/2) to a display color by the high/low threshold lines.
 static GColor prv_bg_color(void) {
@@ -533,7 +573,7 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
     // ("69%... of what?") on its own. p_low directly answers "how likely do I need to treat".
     // Filled band only for TREAT (plain text for WATCH) so the display stays calm until it's urgent.
     if (s_hypo_valid) {
-        const bool treat = s_hypo_pct >= HYPO_TREAT_THRESHOLD;
+        const bool treat = s_hypo_pct >= s_hypo_treat_threshold;
         char hypo_text[16];
         snprintf(hypo_text, sizeof(hypo_text), "%s %u%%", treat ? "TREAT" : "WATCH",
                  (unsigned)s_hypo_p_low);
@@ -630,7 +670,7 @@ static int first_visible_point(void) {
     const uint32_t now = time(NULL);
     for (int i = 0; i < s_graph_count; i++) {
         const uint32_t pt_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[i] * 60;
-        if ((int64_t)now - (int64_t)pt_ts <= (int64_t)GRAPH_HOURS * 3600)
+        if ((int64_t)now - (int64_t)pt_ts <= (int64_t)s_graph_hours * 3600)
             return i;
     }
     return s_graph_count;
@@ -703,13 +743,16 @@ static void draw_graph_axes(GContext *ctx, GRect bounds) {
     graphics_draw_line(ctx, GPoint(0, hi_y), GPoint(width, hi_y));
     graphics_draw_line(ctx, GPoint(0, lo_y), GPoint(width, lo_y));
 
-    // Hourly tick marks, counted back from "now" (the right end of the trace); the tick at "now" also
-    // marks where the forecast starts.
+    // Tick marks, counted back from "now" (the right end of the trace); the tick at "now" also marks
+    // where the forecast starts. One per hour up to GRAPH_TICK_MAX; beyond that (a long graph window)
+    // one per hour would be an unreadable comb, so the ticks space out to a whole-hour interval
+    // instead of staying one-per-hour.
     const int tick_length = 5; // Pixel length
     const int half_tick = tick_length / 2;
     const int trace_w = width * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
-    for (int n = 0; n < GRAPH_HOURS; n++) {
-        const int x = trace_w - trace_w * n / GRAPH_HOURS;
+    const int tick_hours = s_graph_hours <= GRAPH_TICK_MAX ? 1 : (s_graph_hours + GRAPH_TICK_MAX - 1) / GRAPH_TICK_MAX;
+    for (int n = 0; n * tick_hours <= s_graph_hours; n++) {
+        const int x = trace_w - trace_w * (n * tick_hours) / s_graph_hours;
         graphics_draw_line(ctx, GPoint(x, hi_y - half_tick), GPoint(x, hi_y + half_tick));
         graphics_draw_line(ctx, GPoint(x, lo_y - half_tick), GPoint(x, lo_y + half_tick));
     }
@@ -723,7 +766,7 @@ static void draw_bg_graph(GContext *ctx, GRect bounds) {
     // Time-axis width; the layer spans the full screen so edge points aren't clipped.
     const int16_t w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN; // todo something better here
     const uint32_t now = time(NULL);
-    const int graph_minutes = GRAPH_HOURS * 60;
+    const int graph_minutes = s_graph_hours * 60;
 
     graphics_context_set_stroke_color(ctx, COLOR_FG);
     graphics_context_set_stroke_width(ctx, STROKE_WIDTH);
@@ -806,12 +849,12 @@ static bool prv_projection_line(GRect bounds, GPoint *from, GPoint *to) {
     const uint32_t now = time(NULL);
     const uint32_t newest_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[s_graph_count - 1] * 60;
     const int age_min = (int)(((int64_t)now - (int64_t)newest_ts) / 60);
-    if (age_min >= STALE_MINUTES) {
+    if (age_min >= s_stale_minutes) {
         return false;
     }
 
     const int graph_w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
-    const int graph_minutes = GRAPH_HOURS * 60;
+    const int graph_minutes = s_graph_hours * 60;
     const int newest_x = graph_w - (age_min * graph_w) / graph_minutes;
     const float px_per_min = (float)graph_w / graph_minutes;
     const float px_per_wire = (float)s_graph_band_h / (s_axis_max - s_axis_min);
@@ -853,7 +896,7 @@ static bool prv_trace_y_at_x(GRect bounds, int x, int *y_out) {
     }
     const int w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
     const uint32_t now = time(NULL);
-    const int graph_minutes = GRAPH_HOURS * 60;
+    const int graph_minutes = s_graph_hours * 60;
     bool have_prev = false;
     int prev_x = 0, prev_y = 0, prev_off = 0;
     for (int i = 0; i < s_graph_count; i++) {
@@ -1052,7 +1095,7 @@ static void draw_peak_label(GContext *ctx, GRect bounds) {
     const uint32_t now = time(NULL);
     const uint32_t pt_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[hi] * 60;
     const int mins_ago = (int)(((int64_t)now - (int64_t)pt_ts) / 60);
-    const int x = w - (mins_ago * w) / (GRAPH_HOURS * 60);
+    const int x = w - (mins_ago * w) / (s_graph_hours * 60);
     const int y = graph_y(s_graph_bg_values[hi]);
 
     // Above/below at the peak's own x first (reads as "pointing at" the peak); only if a meal glyph
@@ -1156,9 +1199,15 @@ static void trend_draw_projection(GContext *ctx, GRect bounds, GPoint pivot, flo
 // so the curve leaves the trace smoothly instead of kinking into a straight chord to the forecast.
 #define FORECAST_DOT_SPACING 6
 #define FORECAST_STEPS 16
+// How much the control point is allowed to pull the curve away from the straight from-to chord:
+// 1.0 is the raw tangent projection (visibly bowed on a steep recent slope), 0.0 is a dead-straight
+// line. 0.4 keeps just enough bend to leave the trace smoothly without reading as an exaggerated S.
+#define FORECAST_CURVE_STRENGTH 0.4f
 static void draw_forecast_curve(GContext *ctx, GPoint from, GPoint to, float tangent_dydx) {
     const float cx = (from.x + to.x) / 2.0f;
-    float cy = from.y + tangent_dydx * (cx - from.x);
+    const float straight_mid_y = (from.y + to.y) / 2.0f;
+    const float tangent_cy = from.y + tangent_dydx * (cx - from.x);
+    float cy = straight_mid_y + FORECAST_CURVE_STRENGTH * (tangent_cy - straight_mid_y);
     // Clamp the control point: a noisy recent slope must bend the curve, not fling it far outside
     // the from/to span. (No fabsf: see sqrtf_local's comment on why libm calls are avoided here.)
     const float span = (float)(to.y > from.y ? to.y - from.y : from.y - to.y) + 20.0f;
@@ -1212,7 +1261,7 @@ static void draw_projection(GContext *ctx, GRect bounds) {
     const uint32_t now = time(NULL);
     const uint32_t newest_ts = s_graph_ref_timestamp + (uint32_t)s_graph_offsets[s_graph_count - 1] * 60;
     const int age_min = (int)(((int64_t)now - (int64_t)newest_ts) / 60);
-    if (age_min >= STALE_MINUTES)
+    if (age_min >= s_stale_minutes)
         return;
 
     // Anchor on the newest reading's ACTUAL position on the trace, so the projection is a true continuation
@@ -1221,7 +1270,7 @@ static void draw_projection(GContext *ctx, GRect bounds) {
     // that point, so the pivot lands on it by construction. The graph's own px/min and px/value set the
     // angle; the time axis is the layer's left NUM/DEN and the projection runs into the rest.
     const int graph_w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
-    const int graph_minutes = GRAPH_HOURS * 60;
+    const int graph_minutes = s_graph_hours * 60;
     const int newest_x = graph_w - (age_min * graph_w) / graph_minutes;
     const float px_per_min = (float)graph_w / graph_minutes;
     const float px_per_wire = (float)s_graph_band_h / (s_axis_max - s_axis_min);
@@ -1294,7 +1343,7 @@ static void draw_one_meal(GContext *ctx, GRect bounds, int x, uint16_t grams, in
 // so their grams labels don't overlap.
 static void draw_meal(GContext *ctx, GRect bounds) {
     const uint32_t now = time(NULL);
-    const int graph_minutes = GRAPH_HOURS * 60;
+    const int graph_minutes = s_graph_hours * 60;
     const int graph_w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
 
     int prev_x = -1000;
@@ -1342,8 +1391,12 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
         return;
     }
     draw_bg_graph(ctx, bounds);
-    draw_meal(ctx, bounds); // placed before the peak label so it registers its boxes first
-    draw_projection(ctx, bounds);
+    if (s_show_meals)
+        draw_meal(ctx, bounds); // placed before the peak label so it registers its boxes first
+    // draw_projection falls back to extrapolating the trace's own recent trend when there's no
+    // KEY_PREDICTED_BG -- gate the call itself, not just s_pred_valid, so the toggle hides both.
+    if (s_show_prediction)
+        draw_projection(ctx, bounds);
     draw_peak_label(ctx, bounds);
 }
 
@@ -1353,7 +1406,7 @@ static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     update_time_and_date();
     update_ago_display(); // advances the staleness hint each minute
     // Re-run on the tick, not just on receipt: during an outage no message arrives, so this is what
-    // blanks the BG/IOB once they cross STALE_MINUTES.
+    // blanks the BG/IOB once they cross s_stale_minutes.
     update_bg_display();
     update_iob_display();
 
@@ -1361,7 +1414,7 @@ static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     // of minutes. The sender answers an announcement with the latest reading, the same nudge that
     // leaving and re-entering the watchface gives.
     const int mins = minutes_ago();
-    if (has_reading() && mins >= 6 && mins < STALE_MINUTES && (tick_time->tm_min % 2) == 0)
+    if (has_reading() && mins >= 6 && mins < s_stale_minutes && (tick_time->tm_min % 2) == 0)
         send_capability_announcement();
 
     if (s_status_layer && (s_status_start != 0 || s_status_end != 0))
@@ -1422,8 +1475,103 @@ static bool parse_meal_list_blob(const uint8_t *d, uint16_t len) {
     return true;
 }
 
+// Clay's toggle wire type isn't pinned down by messageKeys (unlike the shared protocol.h keys,
+// which spell out an exact width) -- read whatever width/signedness it used rather than assuming.
+static bool prv_tuple_bool(const Tuple *t, bool fallback) {
+    if (!t) {
+        return fallback;
+    }
+    switch (t->type) {
+        case TUPLE_UINT:
+            return t->length == 1 ? t->value->uint8 != 0 : t->length == 2 ? t->value->uint16 != 0 : t->value->uint32 != 0;
+        case TUPLE_INT:
+            return t->length == 1 ? t->value->int8 != 0 : t->length == 2 ? t->value->int16 != 0 : t->value->int32 != 0;
+        default:
+            return fallback;
+    }
+}
+
+// Same idea as prv_tuple_bool, for a Clay slider's numeric value.
+static uint32_t prv_tuple_uint32(const Tuple *t, uint32_t fallback) {
+    if (!t) {
+        return fallback;
+    }
+    switch (t->type) {
+        case TUPLE_UINT:
+            return t->length == 1 ? t->value->uint8 : t->length == 2 ? t->value->uint16 : t->value->uint32;
+        case TUPLE_INT:
+            return t->length == 1 ? (uint32_t)t->value->int8 : t->length == 2 ? (uint32_t)t->value->int16 : (uint32_t)t->value->int32;
+        default:
+            return fallback;
+    }
+}
+
 // Handle a new dictionary of AppMessage keys and values.
 static void handle_dictionary(DictionaryIterator *iter, void *context) {
+
+    // Settings from the phone's Settings page (Clay -- see src/pkjs). Sent as their own AppMessage
+    // on save, independent of any BG push from the firmware, so this doesn't belong gated behind
+    // bg_tuple below. One dict_find per field so a partial/older config page still applies whatever
+    // it does send.
+    Tuple *alerts_low_tuple = dict_find(iter, MESSAGE_KEY_AlertsLow);
+    Tuple *alerts_other_tuple = dict_find(iter, MESSAGE_KEY_AlertsOther);
+    Tuple *graph_hours_tuple = dict_find(iter, MESSAGE_KEY_GraphHours);
+    Tuple *stale_minutes_tuple = dict_find(iter, MESSAGE_KEY_StaleMinutes);
+    Tuple *hypo_threshold_tuple = dict_find(iter, MESSAGE_KEY_HypoTreatThreshold);
+    Tuple *hypo_vibrate_tuple = dict_find(iter, MESSAGE_KEY_HypoVibrate);
+    Tuple *show_meals_tuple = dict_find(iter, MESSAGE_KEY_ShowMeals);
+    Tuple *show_hypo_tuple = dict_find(iter, MESSAGE_KEY_ShowHypo);
+    Tuple *show_prediction_tuple = dict_find(iter, MESSAGE_KEY_ShowPrediction);
+    Tuple *show_trend_tuple = dict_find(iter, MESSAGE_KEY_ShowTrend);
+    if (alerts_low_tuple || alerts_other_tuple || graph_hours_tuple || stale_minutes_tuple ||
+        hypo_threshold_tuple || hypo_vibrate_tuple || show_meals_tuple || show_hypo_tuple ||
+        show_prediction_tuple || show_trend_tuple) {
+        s_alerts_low = prv_tuple_bool(alerts_low_tuple, s_alerts_low);
+        s_alerts_other = prv_tuple_bool(alerts_other_tuple, s_alerts_other);
+        s_graph_hours = (uint8_t)prv_tuple_uint32(graph_hours_tuple, s_graph_hours);
+        s_stale_minutes = (uint8_t)prv_tuple_uint32(stale_minutes_tuple, s_stale_minutes);
+        s_hypo_treat_threshold = (uint8_t)prv_tuple_uint32(hypo_threshold_tuple, s_hypo_treat_threshold);
+        s_hypo_vibrate = prv_tuple_bool(hypo_vibrate_tuple, s_hypo_vibrate);
+        s_show_meals = prv_tuple_bool(show_meals_tuple, s_show_meals);
+        s_show_hypo = prv_tuple_bool(show_hypo_tuple, s_show_hypo);
+        s_show_prediction = prv_tuple_bool(show_prediction_tuple, s_show_prediction);
+        s_show_trend = prv_tuple_bool(show_trend_tuple, s_show_trend);
+
+        persist_write_bool(PERSIST_KEY_ALERTS_LOW, s_alerts_low);
+        persist_write_bool(PERSIST_KEY_ALERTS_OTHER, s_alerts_other);
+        persist_write_int(PERSIST_KEY_GRAPH_HOURS, s_graph_hours);
+        persist_write_int(PERSIST_KEY_STALE_MINUTES, s_stale_minutes);
+        persist_write_int(PERSIST_KEY_HYPO_TREAT_THRESHOLD, s_hypo_treat_threshold);
+        persist_write_bool(PERSIST_KEY_HYPO_VIBRATE, s_hypo_vibrate);
+        persist_write_bool(PERSIST_KEY_SHOW_MEALS, s_show_meals);
+        persist_write_bool(PERSIST_KEY_SHOW_HYPO, s_show_hypo);
+        persist_write_bool(PERSIST_KEY_SHOW_PREDICTION, s_show_prediction);
+        persist_write_bool(PERSIST_KEY_SHOW_TREND, s_show_trend);
+
+        // Apply disabled features immediately, rather than waiting for the sender to notice its
+        // announced capabilities shrank and stop pushing them -- a toggle should look instant.
+        if (!s_show_meals) {
+            s_meal_count = 0;
+        }
+        if (!s_show_hypo) {
+            s_hypo_valid = false;
+        }
+        if (!s_show_prediction) {
+            s_pred_valid = false;
+        }
+        if (!s_show_trend) {
+            s_trend_valid = false;
+            update_trend_indicator();
+        }
+        if (s_graph_layer) {
+            layer_mark_dirty(s_graph_layer);
+        }
+        if (s_status_layer) {
+            layer_mark_dirty(s_status_layer);
+        }
+        prv_layout_graph();
+        send_capability_announcement(); // relay to the firmware right away, not on the next poll
+    }
 
     // BG and timestamp
     Tuple *bg_tuple = dict_find(iter, KEY_BG_STRING);
@@ -1480,7 +1628,7 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
     // so its absence here must clear any previously shown arrow, not leave the old one stale.
     if (bg_tuple) {
         Tuple *trend_tuple = dict_find(iter, KEY_TREND_ARROW);
-        s_trend_valid = (trend_tuple != NULL);
+        s_trend_valid = s_show_trend && (trend_tuple != NULL);
         s_trend_arrow = trend_tuple ? trend_tuple->value->uint8 : TREND_UNKNOWN;
         update_trend_indicator();
     }
@@ -1488,26 +1636,28 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
     // Prediction: like the trend arrow, sent with a BG push, and its absence clears the last one.
     if (bg_tuple) {
         Tuple *pred_tuple = dict_find(iter, KEY_PREDICTED_BG);
-        s_pred_valid = (pred_tuple != NULL);
+        s_pred_valid = s_show_prediction && (pred_tuple != NULL);
         s_pred_mgdl = pred_tuple ? pred_tuple->value->uint16 : 0;
     }
 
     // Meals: KEY_MEAL_LIST (every meal still in the window) takes priority; KEY_MEAL_CARBS/
     // KEY_MEAL_TIMESTAMP (the newest one only) is the fallback for a sender that predates it.
     // Either way the sender keeps sending until a change, so absence here means no change.
-    Tuple *meal_list_tuple = dict_find(iter, KEY_MEAL_LIST);
-    if (meal_list_tuple && parse_meal_list_blob(meal_list_tuple->value->data, meal_list_tuple->length)) {
-        if (s_graph_layer)
-            layer_mark_dirty(s_graph_layer);
-    } else {
-        Tuple *meal_tuple = dict_find(iter, KEY_MEAL_CARBS);
-        Tuple *meal_ts_tuple = dict_find(iter, KEY_MEAL_TIMESTAMP);
-        if (meal_tuple && meal_ts_tuple) {
-            s_meal_count = 1;
-            s_meal_grams[0] = meal_tuple->value->uint16;
-            s_meal_ts[0] = meal_ts_tuple->value->uint32;
+    if (s_show_meals) {
+        Tuple *meal_list_tuple = dict_find(iter, KEY_MEAL_LIST);
+        if (meal_list_tuple && parse_meal_list_blob(meal_list_tuple->value->data, meal_list_tuple->length)) {
             if (s_graph_layer)
                 layer_mark_dirty(s_graph_layer);
+        } else {
+            Tuple *meal_tuple = dict_find(iter, KEY_MEAL_CARBS);
+            Tuple *meal_ts_tuple = dict_find(iter, KEY_MEAL_TIMESTAMP);
+            if (meal_tuple && meal_ts_tuple) {
+                s_meal_count = 1;
+                s_meal_grams[0] = meal_tuple->value->uint16;
+                s_meal_ts[0] = meal_ts_tuple->value->uint32;
+                if (s_graph_layer)
+                    layer_mark_dirty(s_graph_layer);
+            }
         }
     }
 
@@ -1519,10 +1669,10 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
     if (bg_tuple) {
         Tuple *hypo_tuple = dict_find(iter, KEY_HYPO_TREAT_PCT);
         Tuple *hypo_plow_tuple = dict_find(iter, KEY_HYPO_P_LOW_PCT);
-        const bool new_valid = (hypo_tuple != NULL);
+        const bool new_valid = s_show_hypo && (hypo_tuple != NULL);
         const uint8_t new_pct = hypo_tuple ? hypo_tuple->value->uint8 : 0;
-        const bool was_above = s_hypo_valid && s_hypo_pct >= HYPO_TREAT_THRESHOLD;
-        const bool now_above = new_valid && new_pct >= HYPO_TREAT_THRESHOLD;
+        const bool was_above = s_hypo_valid && s_hypo_pct >= s_hypo_treat_threshold;
+        const bool now_above = new_valid && new_pct >= s_hypo_treat_threshold;
         s_hypo_valid = new_valid;
         s_hypo_pct = new_pct;
         s_hypo_p_low = hypo_plow_tuple ? hypo_plow_tuple->value->uint8 : 0;
@@ -1547,7 +1697,6 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
         s_graph_low_line = low_tuple->value->uint8;
     if ((high_tuple || low_tuple) && s_graph_layer)
         layer_mark_dirty(s_graph_layer);
-    // KEY_GRAPH_HOURS from the phone is ignored: the visible window is fixed to GRAPH_HOURS.
 
     APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s (ts=%lu) IOB: %s graph=%d", s_bg_string, s_bg_timestamp, s_iob_string,
             s_graph_count);
@@ -1559,7 +1708,9 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
     // Fire last, now that the BG value/ago label/graph above are all current for this reading.
     if (s_hypo_alert_pending) {
         s_hypo_alert_pending = false;
-        vibes_double_pulse();
+        if (s_hypo_vibrate) {
+            vibes_double_pulse();
+        }
     }
 }
 
@@ -1575,11 +1726,21 @@ static void send_capability_announcement(void) {
         APP_LOG(APP_LOG_LEVEL_ERROR, "outbox_begin failed");
         return;
     }
+    // Disabled features (Settings page) drop their capability bits too, not just the local draw --
+    // no point asking the sender for data nobody will show; it also saves it the work.
+    uint32_t caps = CAP_BG | CAP_IOB | CAP_STATUS | CAP_PUMP_CONNECTED | CAP_IOB_TOTAL;
+    if (s_show_trend) caps |= CAP_TREND_ARROW;
+    if (s_show_meals) caps |= CAP_MEAL | CAP_MEAL_LIST;
+    if (s_show_prediction) caps |= CAP_PREDICTION;
+    if (s_show_hypo) caps |= CAP_HYPO;
     dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
-    dict_write_uint32(iter, KEY_CAPABILITIES,
-                      CAP_BG | CAP_IOB | CAP_STATUS | CAP_PUMP_CONNECTED | CAP_TREND_ARROW | CAP_MEAL |
-                          CAP_PREDICTION | CAP_IOB_TOTAL | CAP_HYPO | CAP_MEAL_LIST);
-    dict_write_uint8(iter, KEY_GRAPH_HOURS, GRAPH_HOURS);
+    dict_write_uint32(iter, KEY_CAPABILITIES, caps);
+    dict_write_uint8(iter, KEY_GRAPH_HOURS, s_graph_hours);
+    dict_write_uint8(iter, KEY_SETTINGS_ALERTS, (s_alerts_low ? SETTINGS_ALERT_LOW : 0) |
+                                                   (s_alerts_other ? SETTINGS_ALERT_OTHER : 0));
+    // Not just CAP_HYPO above: this stops the sender computing the model at all, not just sending
+    // it -- ShowHypo off should be a real "completely disabled", not just a hidden result.
+    dict_write_uint8(iter, KEY_SETTINGS_FEATURES, s_show_hypo ? SETTINGS_FEATURE_HYPO : 0);
     if (app_message_outbox_send() != APP_MSG_OK) {
         APP_LOG(APP_LOG_LEVEL_ERROR, "outbox_send failed");
     }
@@ -1802,6 +1963,28 @@ static void init(void) {
     for (uint32_t key = 1; key <= 12; key++) {
         persist_delete(key);
     }
+    // The exceptions: the phone-configured settings above (persisted, unlike everything else).
+    if (persist_exists(PERSIST_KEY_ALERTS_LOW))
+        s_alerts_low = persist_read_bool(PERSIST_KEY_ALERTS_LOW);
+    if (persist_exists(PERSIST_KEY_ALERTS_OTHER))
+        s_alerts_other = persist_read_bool(PERSIST_KEY_ALERTS_OTHER);
+    if (persist_exists(PERSIST_KEY_GRAPH_HOURS))
+        s_graph_hours = (uint8_t)persist_read_int(PERSIST_KEY_GRAPH_HOURS);
+    if (persist_exists(PERSIST_KEY_STALE_MINUTES))
+        s_stale_minutes = (uint8_t)persist_read_int(PERSIST_KEY_STALE_MINUTES);
+    if (persist_exists(PERSIST_KEY_HYPO_TREAT_THRESHOLD))
+        s_hypo_treat_threshold = (uint8_t)persist_read_int(PERSIST_KEY_HYPO_TREAT_THRESHOLD);
+    if (persist_exists(PERSIST_KEY_HYPO_VIBRATE))
+        s_hypo_vibrate = persist_read_bool(PERSIST_KEY_HYPO_VIBRATE);
+    if (persist_exists(PERSIST_KEY_SHOW_MEALS))
+        s_show_meals = persist_read_bool(PERSIST_KEY_SHOW_MEALS);
+    if (persist_exists(PERSIST_KEY_SHOW_HYPO))
+        s_show_hypo = persist_read_bool(PERSIST_KEY_SHOW_HYPO);
+    if (persist_exists(PERSIST_KEY_SHOW_PREDICTION))
+        s_show_prediction = persist_read_bool(PERSIST_KEY_SHOW_PREDICTION);
+    if (persist_exists(PERSIST_KEY_SHOW_TREND))
+        s_show_trend = persist_read_bool(PERSIST_KEY_SHOW_TREND);
+
     app_message_register_inbox_received(handle_dictionary);
     app_message_register_inbox_dropped(inbox_dropped_callback);
     app_message_open(2048, 64); // inbox large enough for the graph byte array (up to 24 h of points)

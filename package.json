@@ -9,7 +9,9 @@
     "displayName": "Morten's Glucose",
     "uuid": "567a3f6e-97d0-4f3a-b63f-916a8213d284",
     "sdkVersion": "3",
-    "enableMultiJS": false,
+    "enableMultiJS": true,
+    "capabilities": ["configurable"],
+    "messageKeys": ["AlertsLow", "AlertsOther", "GraphHours", "StaleMinutes", "HypoTreatThreshold", "HypoVibrate", "ShowMeals", "ShowHypo", "ShowPrediction", "ShowTrend"],
     "targetPlatforms": [
       "aplite",
       "basalt",
