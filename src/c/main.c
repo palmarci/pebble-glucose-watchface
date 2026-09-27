@@ -1455,8 +1455,17 @@ static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     // the display actually goes stale (mins >= s_stale_minutes) is exactly backwards: that is the
     // moment recovery matters most, and until this had no cap a single missed push left the watch
     // frozen until manually relaunched, even though the pump/phone link came back on its own.
+    //
+    // Before the first reading ever arrives (has_reading() false, e.g. the pump connects while
+    // this watchface is already foreground and its own connect-event push races the firmware's
+    // "who is foreground" check and gets dropped), retry every minute instead of every two -- there
+    // is no display to disturb yet, so there's no reason to wait, and this is what used to leave
+    // the pump-connected icon showing X and the graph empty even after the pump had come online
+    // and the phone could see IOB values (a push the firmware DID send, just not this one).
     const int mins = minutes_ago();
-    if (has_reading() && mins >= 6 && (tick_time->tm_min % 2) == 0)
+    const bool never_had_reading = !has_reading();
+    if ((never_had_reading || mins >= 6) &&
+        (never_had_reading || (tick_time->tm_min % 2) == 0))
         send_capability_announcement();
 
     if (s_status_layer && (s_status_start != 0 || s_status_end != 0))
