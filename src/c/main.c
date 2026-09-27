@@ -1449,11 +1449,14 @@ static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     update_bg_display();
     update_iob_display();
 
-    // Self-heal a missed push: past the "fresh" window but not yet stale, re-announce every couple
-    // of minutes. The sender answers an announcement with the latest reading, the same nudge that
-    // leaving and re-entering the watchface gives.
+    // Self-heal a missed push: past the "fresh" window, re-announce every couple of minutes. The
+    // sender answers an announcement with the latest reading, the same nudge that leaving and
+    // re-entering the watchface gives. Deliberately has no upper bound on mins -- stopping once
+    // the display actually goes stale (mins >= s_stale_minutes) is exactly backwards: that is the
+    // moment recovery matters most, and until this had no cap a single missed push left the watch
+    // frozen until manually relaunched, even though the pump/phone link came back on its own.
     const int mins = minutes_ago();
-    if (has_reading() && mins >= 6 && mins < s_stale_minutes && (tick_time->tm_min % 2) == 0)
+    if (has_reading() && mins >= 6 && (tick_time->tm_min % 2) == 0)
         send_capability_announcement();
 
     if (s_status_layer && (s_status_start != 0 || s_status_end != 0))
