@@ -197,6 +197,12 @@ static uint8_t s_hypo_p_low = 0;
 // reading -- so the watch never buzzes for a low while still showing the previous, stale value.
 static bool s_hypo_alert_pending = false;
 
+// The sender scores a falling reading from 6.0 mmol/L down, well before most of those turn into a
+// real low. Only a score at the treat threshold is worth screen space; below it, stay quiet.
+static bool prv_hypo_banner_shown(void) {
+    return s_hypo_valid && s_hypo_pct >= s_hypo_treat_threshold;
+}
+
 // Alert popup preference: configured on the phone (Settings page, Clay -- see src/pkjs), relayed
 // to the firmware's annunciation filter in send_capability_announcement(). Persisted, unlike
 // everything else in this app (see init()'s comment on that), because it is user intent rather
@@ -370,7 +376,7 @@ static void prv_layout_graph(void) {
         return;
     }
     const bool show_trend_row = prv_should_show_trend_row();
-    const bool show_status = s_hypo_valid || s_status_string[0] != '\0';
+    const bool show_status = prv_hypo_banner_shown() || s_status_string[0] != '\0';
 
     const int bg_bottom = (s_caps_top_y - cap_offset(FONT_BG_VALUE)) + BG_ROW_H;
     const int y = bg_bottom + (show_trend_row ? TREND_ROW_GAP + TREND_ROW_H : 0) + GRAPH_BREATHING_GAP;
@@ -568,15 +574,13 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
 
     // The hypo (treat-or-wait) banner takes priority over the pump status line: it's the more
     // urgent, time-sensitive thing to show, and pump status resumes on its own once this clears.
-    // An explicit decision word (TREAT/WATCH) plus p_low as its confidence number, rather than one
-    // bare percentage: treat_pct alone also folds in overtreatment risk, which reads as ambiguous
-    // ("69%... of what?") on its own. p_low directly answers "how likely do I need to treat".
-    // Filled band only for TREAT (plain text for WATCH) so the display stays calm until it's urgent.
-    if (s_hypo_valid) {
-        const bool treat = s_hypo_pct >= s_hypo_treat_threshold;
+    // The decision word plus p_low as its confidence number, rather than one bare percentage:
+    // treat_pct alone also folds in overtreatment risk, which reads as ambiguous ("69%... of
+    // what?") on its own. p_low directly answers "how likely do I need to treat". Only shown at
+    // the treat threshold (prv_hypo_banner_shown); a sub-threshold score shows nothing at all.
+    if (prv_hypo_banner_shown()) {
         char hypo_text[16];
-        snprintf(hypo_text, sizeof(hypo_text), "%s %u%%", treat ? "TREAT" : "WATCH",
-                 (unsigned)s_hypo_p_low);
+        snprintf(hypo_text, sizeof(hypo_text), "TREAT %u%%", (unsigned)s_hypo_p_low);
         // The layer's own bottom edge sits flush against the time's cap-top with no gap at all --
         // fine for the plain pump-status text below (tuned tight on request, see its own comment),
         // but a solid filled block touching the time digits with zero clearance reads as visually
@@ -584,21 +588,16 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
         // band's own height (not the layer, not the plain-status case) fixes that without giving up
         // any of the graph space the tight layer height otherwise reclaims.
         #define TREAT_BAND_BOTTOM_GAP 3
-        const GRect band = treat ? GRect(0, 0, w, STATUS_H - TREAT_BAND_BOTTOM_GAP) : GRect(0, 0, w, STATUS_H);
-        if (treat) {
-            graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(COLOR_BG_LOW, COLOR_FG));
-            graphics_fill_rect(ctx, band, 0, GCornerNone);
-            graphics_context_set_text_color(ctx, GColorBlack);
-        } else {
-            graphics_context_set_text_color(ctx, COLOR_FG);
-        }
+        const GRect band = GRect(0, 0, w, STATUS_H - TREAT_BAND_BOTTOM_GAP);
+        graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(COLOR_BG_LOW, COLOR_FG));
+        graphics_fill_rect(ctx, band, 0, GCornerNone);
+        graphics_context_set_text_color(ctx, GColorBlack);
         // graphics_draw_text's vertical position within an oversized box isn't centered -- measured
         // 2px low here (7px clear above the glyphs, 3px below, in a 21px band), same top-padding-
         // before-the-glyphs behaviour the peak label already corrects for with its own "-3". Shifts
         // only the text, not the fill, so the visible band's own edges (and the gap fixed above) are
         // unaffected -- just where the glyphs sit inside it.
-        const GRect text_box = treat ? GRect(band.origin.x, band.origin.y - 2, band.size.w, band.size.h)
-                                     : band;
+        const GRect text_box = GRect(band.origin.x, band.origin.y - 2, band.size.w, band.size.h);
         graphics_draw_text(ctx, hypo_text, fonts_get_system_font(STATUS_FONT), text_box,
                            GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
         return;
@@ -1080,11 +1079,91 @@ static GRect prv_place_glyph(GRect bounds, GRect clamp_area, const GRect *candid
     return fallback;
 }
 
+// The trace's vertical extent per pixel column, ink included, for the peak label's search below: a
+// lookup per column instead of a walk over every graph point for each of the thousands of boxes it
+// tries. Each column also spans its neighbours' y, so a steep segment counts as the solid stroke it
+// is on screen rather than as one sample every GLYPH_SAMPLE_STEP px.
+static int16_t s_trace_col_min[PBL_DISPLAY_WIDTH + 1];
+static int16_t s_trace_col_max[PBL_DISPLAY_WIDTH + 1];
+
+static void prv_build_trace_columns(GRect bounds, int w) {
+    // Static, not on the stack: ~1 KB is a real share of an app's stack on the older platforms.
+    static int16_t ys[PBL_DISPLAY_WIDTH + 1];
+    static bool has[PBL_DISPLAY_WIDTH + 1];
+    for (int x = 0; x <= w; x++) {
+        int y = 0;
+        has[x] = prv_trace_y_at_x(bounds, x, &y);
+        ys[x] = (int16_t)y;
+    }
+    for (int x = 0; x <= w; x++) {
+        s_trace_col_min[x] = INT16_MAX;
+        s_trace_col_max[x] = INT16_MIN;
+        for (int n = x - 1; n <= x + 1; n++) {
+            if (n >= 0 && n <= w && has[n]) {
+                if (ys[n] < s_trace_col_min[x]) s_trace_col_min[x] = ys[n];
+                if (ys[n] > s_trace_col_max[x]) s_trace_col_max[x] = ys[n];
+            }
+        }
+    }
+}
+
+// TRACE_STROKE_MARGIN covers the stroke's ink; the extra px keep the digits from sitting flush on it.
+#define PEAK_TRACE_CLEARANCE (TRACE_STROKE_MARGIN + 2)
+
+static bool prv_box_crosses_trace_columns(GRect box, int w) {
+    const int x0 = box.origin.x < 0 ? 0 : box.origin.x;
+    const int x1 = box.origin.x + box.size.w > w ? w : box.origin.x + box.size.w;
+    for (int x = x0; x <= x1; x++) {
+        if (s_trace_col_min[x] <= s_trace_col_max[x] &&
+            s_trace_col_max[x] + PEAK_TRACE_CLEARANCE >= box.origin.y &&
+            s_trace_col_min[x] - PEAK_TRACE_CLEARANCE <= box.origin.y + box.size.h) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The collision-free box nearest to (px, py) inside `area`, or false if every position collides.
+// Scans the whole area on a 2px grid rather than trying a few fixed spots around the peak: on a
+// steep trace (a peak at the graph's left edge with the BG falling away from it, the common case
+// hours after a meal) every fixed spot sat on the line, and the tiered fallback then drew the label
+// straight across it. Ties go to "above", then to horizontally centered over the peak.
+#define PEAK_SEARCH_STEP 2
+static bool prv_find_free_box_near(GRect bounds, GRect area, int w, int px, int py, int bw, int bh,
+                                   GRect *out) {
+    GPoint pfrom, pto;
+    const bool have_proj = prv_projection_line(bounds, &pfrom, &pto);
+    const int hi_y = graph_y(s_graph_high_line), lo_y = graph_y(s_graph_low_line);
+    int32_t best = INT32_MAX;
+    for (int by = area.origin.y; by + bh <= area.origin.y + area.size.h; by += PEAK_SEARCH_STEP) {
+        const int dy = by > py ? by - py : (py > by + bh ? py - (by + bh) : 0);
+        const bool below = by + bh / 2 > py;
+        for (int bx = area.origin.x; bx + bw <= area.origin.x + area.size.w; bx += PEAK_SEARCH_STEP) {
+            const int dx = bx > px ? bx - px : (px > bx + bw ? px - (bx + bw) : 0);
+            const int off_center = bx + bw / 2 - px;
+            const int32_t cost = (int32_t)(dx * dx + dy * dy) * 16 + (below ? 8 : 0) +
+                                 (off_center < 0 ? -off_center : off_center);
+            if (cost >= best) {
+                continue;
+            }
+            const GRect c = GRect(bx, by, bw, bh);
+            if (prv_box_crosses_hline(c, hi_y) || prv_box_crosses_hline(c, lo_y) ||
+                prv_box_crosses_trace_columns(c, w) || prv_box_crosses_registry(c) ||
+                (have_proj && prv_box_crosses_segment(c, pfrom, pto))) {
+                continue;
+            }
+            best = cost;
+            *out = c;
+        }
+    }
+    return best != INT32_MAX;
+}
+
 // The window's highest reading as a tiny number, no plate so it never hides the trace or the meal
-// marker. The only text on the graph. Ties (by displayed value) go to the newest point. Candidates
-// are above and below the peak's own point; prv_place_glyph picks whichever one nothing crosses
-// (falling back to "above" if both do) and clamps it to the trace's own width -- the label never
-// belongs in the forecast column, unlike the meal label, which is allowed to reach into it.
+// marker. The only text on the graph. Ties (by displayed value) go to the newest point. Placed at
+// the nearest spot nothing crosses (prv_find_free_box_near), kept to the trace's own width -- the
+// label never belongs in the forecast column, unlike the meal label, which is allowed to reach
+// into it.
 static void draw_peak_label(GContext *ctx, GRect bounds) {
     const int first = first_visible_point();
     if (first >= s_graph_count) {
@@ -1103,51 +1182,27 @@ static void draw_peak_label(GContext *ctx, GRect bounds) {
     const int x = w - (mins_ago * w) / (s_graph_hours * 60);
     const int y = graph_y(s_graph_bg_values[hi]);
 
-    // Above/below at the peak's own x first (reads as "pointing at" the peak); only if a meal glyph
-    // or a line blocks both of those does it nudge sideways -- still near the peak, just not
-    // dead-center over it, which is a much smaller compromise than the alternative of leaving it
-    // somewhere it visibly collides with something (a real case: a meal logged minutes before the
-    // peak reading puts its label right where the peak label would otherwise go).
     // graphics_draw_text needs 3px more headroom than the label's nominal height to center the
-    // glyphs without clipping, drawn above the box's own top edge -- so the candidate boxes below
-    // already include that 3px on top. Otherwise the collision check clears a box the real draw
-    // then overshoots, and the digits end up sitting on whatever was just above it (the trace, on a
-    // sharp peak, since the "below" candidate's gap is only PEAK_LABEL_GAP wide to begin with).
+    // glyphs without clipping, drawn above the box's own top edge -- so every box below already
+    // includes that 3px on top. Otherwise the collision check clears a box the real draw then
+    // overshoots, and the digits end up sitting on whatever was just above it.
     const int render_h = PEAK_LABEL_H + 3;
-    const int top = y - PEAK_LABEL_GAP - render_h, bottom = y + PEAK_LABEL_GAP - 3;
-    // Half a label-height further down than "bottom" -- enough to clear a smooth curve's local
-    // descent on most peaks, without reading as visually detached from the peak the way a full
-    // extra render_h did (real-hardware report: the label ended up "way down", not close to the
-    // graph). Still a last resort; see below.
-    const int far_bottom = bottom + render_h / 2;
-    const int shift = PEAK_LABEL_W;
-    // "top"/"bottom" first (see above); the "far_bottom" trio is a last resort for a peak close
-    // enough to the top of the graph that every "top" candidate clamps down into the high line, AND
-    // sharp enough that "bottom" sits on the trace's own downslope on both sides -- a real
-    // combination on a narrow/short screen (the peak is close to the axis ceiling, and the label is
-    // a large fraction of the available width).
-    const GRect candidates[] = {
-        GRect(x - PEAK_LABEL_W / 2, top, PEAK_LABEL_W, render_h),
-        GRect(x - PEAK_LABEL_W / 2, bottom, PEAK_LABEL_W, render_h),
-        GRect(x - PEAK_LABEL_W / 2 - shift, top, PEAK_LABEL_W, render_h),
-        GRect(x - PEAK_LABEL_W / 2 + shift, top, PEAK_LABEL_W, render_h),
-        GRect(x - PEAK_LABEL_W / 2 - shift, bottom, PEAK_LABEL_W, render_h),
-        GRect(x - PEAK_LABEL_W / 2 + shift, bottom, PEAK_LABEL_W, render_h),
-        GRect(x - PEAK_LABEL_W / 2, far_bottom, PEAK_LABEL_W, render_h),
-        GRect(x - PEAK_LABEL_W / 2 - shift, far_bottom, PEAK_LABEL_W, render_h),
-        GRect(x - PEAK_LABEL_W / 2 + shift, far_bottom, PEAK_LABEL_W, render_h),
-    };
     const GRect clamp_area = GRect(0, 0, w, bounds.size.h);
-    // Text is centered either way, so which candidate won doesn't matter here.
-    int chosen = -1;
-    const GRect box = prv_place_glyph(bounds, clamp_area, candidates, 9, &chosen);
-    prv_register_glyph(box); // nothing draws after this yet, but keep the registry complete
-    // chosen >= 6 is the far_bottom fallback -- worth knowing about on its own, since it means
-    // every nearer placement collided with something (see the candidates comment above).
-    if (chosen >= 6) {
-        APP_LOG(APP_LOG_LEVEL_INFO, "peak label: far_bottom fallback (chosen=%d) peak=(%d,%d) box=(%d,%d,%d,%d)",
-                chosen, x, y, box.origin.x, box.origin.y, box.size.w, box.size.h);
+    prv_build_trace_columns(bounds, w);
+    GRect box;
+    if (!prv_find_free_box_near(bounds, clamp_area, w, x, y, PEAK_LABEL_W, render_h, &box)) {
+        // Nowhere is clear (a very busy frame): the old fixed above/below spots, via the tiered
+        // fallback that at least keeps it off the other glyphs.
+        const int top = y - PEAK_LABEL_GAP - render_h, bottom = y + PEAK_LABEL_GAP - 3;
+        const GRect candidates[] = {
+            GRect(x - PEAK_LABEL_W / 2, top, PEAK_LABEL_W, render_h),
+            GRect(x - PEAK_LABEL_W / 2, bottom, PEAK_LABEL_W, render_h),
+        };
+        box = prv_place_glyph(bounds, clamp_area, candidates, 2, NULL);
+        APP_LOG(APP_LOG_LEVEL_INFO, "peak label: no free spot, peak=(%d,%d) box=(%d,%d)", x, y,
+                box.origin.x, box.origin.y);
     }
+    prv_register_glyph(box); // nothing draws after this yet, but keep the registry complete
 
     char text[8];
     format_mmol(text, sizeof(text), s_graph_bg_values[hi]);
@@ -1727,10 +1782,10 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
         Tuple *hypo_plow_tuple = dict_find(iter, KEY_HYPO_P_LOW_PCT);
         const bool new_valid = s_show_hypo && (hypo_tuple != NULL);
         const uint8_t new_pct = hypo_tuple ? hypo_tuple->value->uint8 : 0;
-        const bool was_above = s_hypo_valid && s_hypo_pct >= s_hypo_treat_threshold;
-        const bool now_above = new_valid && new_pct >= s_hypo_treat_threshold;
+        const bool was_above = prv_hypo_banner_shown();
         s_hypo_valid = new_valid;
         s_hypo_pct = new_pct;
+        const bool now_above = prv_hypo_banner_shown();
         s_hypo_p_low = hypo_plow_tuple ? hypo_plow_tuple->value->uint8 : 0;
         if (now_above && !was_above)
             s_hypo_alert_pending = true;
