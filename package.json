@@ -11,7 +11,7 @@
     "sdkVersion": "3",
     "enableMultiJS": true,
     "capabilities": ["configurable"],
-    "messageKeys": ["AlertsLow", "AlertsOther", "GraphHours", "StaleMinutes", "HypoTreatThreshold", "HypoVibrate", "ShowMeals", "ShowHypo", "ShowPrediction", "ShowTrend"],
+    "messageKeys": ["AlertsLow", "AlertsOther", "GraphHours", "StaleMinutes", "HypoTreatThreshold", "HypoAlert", "ShowMeals", "ShowHypo", "ShowPrediction", "ShowTrend"],
     "targetPlatforms": [
       "aplite",
       "basalt",

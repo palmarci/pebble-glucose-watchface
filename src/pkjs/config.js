@@ -55,7 +55,7 @@ module.exports = [
   },
   {
     "type": "text",
-    "defaultValue": "The on-watch model that decides TREAT vs WATCH for a falling low."
+    "defaultValue": "The on-watch model that scores a falling BG from 6.0 mmol/L down and says TREAT when a low is likely coming."
   },
   {
     "type": "slider",
@@ -70,9 +70,9 @@ module.exports = [
   },
   {
     "type": "toggle",
-    "messageKey": "HypoVibrate",
-    "label": "Vibrate on TREAT",
-    "description": "Turn off to keep the TREAT/WATCH band visual-only.",
+    "messageKey": "HypoAlert",
+    "label": "Alert on TREAT",
+    "description": "Pop up a notification, with vibration, when the hypo model says to treat: its treat score, low chance, lowest BG in the next hour and the current BG. Off: the TREAT band only.",
     "defaultValue": true
   },
   {
@@ -93,8 +93,8 @@ module.exports = [
   {
     "type": "toggle",
     "messageKey": "ShowHypo",
-    "label": "Hypo TREAT/WATCH",
-    "description": "The falling-low decision band below the graph.",
+    "label": "Hypo model",
+    "description": "Run the model at all: the TREAT band below the graph and the alert above. Off skips it on the watch entirely.",
     "defaultValue": true
   },
   {

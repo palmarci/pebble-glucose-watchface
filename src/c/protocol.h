@@ -24,7 +24,7 @@
 #define KEY_STATUS_END 18
 #define KEY_PUMP_CONNECTED 19  // uint8, 0=offline 1=connected; offline is the default
 #define KEY_MEAL_CARBS 20      // uint16, grams of carbohydrate of the latest meal; omitted if none
-#define KEY_MEAL_TIMESTAMP 21  // uint32, unix time the meal was recorded
+#define KEY_MEAL_TIMESTAMP 21  // uint32, unix time the sender learned of the meal (the pump's record carries no absolute time)
 // Keys 22-29 reserved
 
 // Message keys: Sender -> watchface (raw graph)
@@ -58,10 +58,11 @@
                                    // keep-last-value rules.
 
 // Alert visibility bitmask for KEY_SETTINGS_ALERTS, watchface -> sender. Configured on the phone
-// (the watchapp's Settings page); the sender falls back to SETTINGS_ALERT_LOW alone until the
-// first announcement carries a value.
+// (the watchapp's Settings page); the sender falls back to SETTINGS_ALERT_LOW and
+// SETTINGS_ALERT_HYPO_MODEL until the first announcement carries a value.
 #define SETTINGS_ALERT_LOW 0x01   // predicted-low, low, and severe-low pump alerts
 #define SETTINGS_ALERT_OTHER 0x02 // every other pump alert (reservoir, battery, sensor, SmartGuard, ...)
+#define SETTINGS_ALERT_HYPO_MODEL 0x04 // the sender's own alert when its hypo model reaches TREAT
 
 // Feature-enable bitmask for KEY_SETTINGS_FEATURES, watchface -> sender. Defaults to
 // SETTINGS_FEATURE_HYPO on (the model's own decision, unchanged from before this key existed)

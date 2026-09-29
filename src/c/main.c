@@ -188,14 +188,13 @@ static uint16_t s_pred_mgdl = 0;
 // false alarms. Leave HYPO_TREAT_THRESHOLD_DEFAULT as the model's own validated value.
 #define HYPO_TREAT_THRESHOLD_DEFAULT 32
 static uint8_t s_hypo_treat_threshold = HYPO_TREAT_THRESHOLD_DEFAULT;
-static bool s_hypo_vibrate = true;  // phone-configurable (Settings page, HypoVibrate)
 static bool s_hypo_valid = false;
 static uint8_t s_hypo_pct = 0;
 static uint8_t s_hypo_p_low = 0;
-// Armed while parsing the dictionary (crossing into the treat band), fired at the very end of
-// handle_dictionary once the BG value, "ago" label and graph have all been updated for this
-// reading -- so the watch never buzzes for a low while still showing the previous, stale value.
-static bool s_hypo_alert_pending = false;
+// No vibration here: the sender pops up its own "Low predicted" notification when the score
+// reaches TREAT, and that notification's vibration is the one alert. This setting (Settings page,
+// HypoAlert) switches that notification on and off, relayed as SETTINGS_ALERT_HYPO_MODEL.
+static bool s_hypo_alert = true;
 
 // The sender scores a falling reading from 6.0 mmol/L down, well before most of those turn into a
 // real low. Only a score at the treat threshold is worth screen space; below it, stay quiet.
@@ -217,7 +216,7 @@ static bool s_alerts_other = false;
 #define PERSIST_KEY_GRAPH_HOURS 22
 #define PERSIST_KEY_STALE_MINUTES 23
 #define PERSIST_KEY_HYPO_TREAT_THRESHOLD 24
-#define PERSIST_KEY_HYPO_VIBRATE 25
+#define PERSIST_KEY_HYPO_ALERT 25
 #define PERSIST_KEY_SHOW_MEALS 26
 #define PERSIST_KEY_SHOW_HYPO 27
 #define PERSIST_KEY_SHOW_PREDICTION 28
@@ -1624,20 +1623,20 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
     Tuple *graph_hours_tuple = dict_find(iter, MESSAGE_KEY_GraphHours);
     Tuple *stale_minutes_tuple = dict_find(iter, MESSAGE_KEY_StaleMinutes);
     Tuple *hypo_threshold_tuple = dict_find(iter, MESSAGE_KEY_HypoTreatThreshold);
-    Tuple *hypo_vibrate_tuple = dict_find(iter, MESSAGE_KEY_HypoVibrate);
+    Tuple *hypo_alert_tuple = dict_find(iter, MESSAGE_KEY_HypoAlert);
     Tuple *show_meals_tuple = dict_find(iter, MESSAGE_KEY_ShowMeals);
     Tuple *show_hypo_tuple = dict_find(iter, MESSAGE_KEY_ShowHypo);
     Tuple *show_prediction_tuple = dict_find(iter, MESSAGE_KEY_ShowPrediction);
     Tuple *show_trend_tuple = dict_find(iter, MESSAGE_KEY_ShowTrend);
     if (alerts_low_tuple || alerts_other_tuple || graph_hours_tuple || stale_minutes_tuple ||
-        hypo_threshold_tuple || hypo_vibrate_tuple || show_meals_tuple || show_hypo_tuple ||
+        hypo_threshold_tuple || hypo_alert_tuple || show_meals_tuple || show_hypo_tuple ||
         show_prediction_tuple || show_trend_tuple) {
         s_alerts_low = prv_tuple_bool(alerts_low_tuple, s_alerts_low);
         s_alerts_other = prv_tuple_bool(alerts_other_tuple, s_alerts_other);
         s_graph_hours = (uint8_t)prv_tuple_uint32(graph_hours_tuple, s_graph_hours);
         s_stale_minutes = (uint8_t)prv_tuple_uint32(stale_minutes_tuple, s_stale_minutes);
         s_hypo_treat_threshold = (uint8_t)prv_tuple_uint32(hypo_threshold_tuple, s_hypo_treat_threshold);
-        s_hypo_vibrate = prv_tuple_bool(hypo_vibrate_tuple, s_hypo_vibrate);
+        s_hypo_alert = prv_tuple_bool(hypo_alert_tuple, s_hypo_alert);
         s_show_meals = prv_tuple_bool(show_meals_tuple, s_show_meals);
         s_show_hypo = prv_tuple_bool(show_hypo_tuple, s_show_hypo);
         s_show_prediction = prv_tuple_bool(show_prediction_tuple, s_show_prediction);
@@ -1648,7 +1647,7 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
         persist_write_int(PERSIST_KEY_GRAPH_HOURS, s_graph_hours);
         persist_write_int(PERSIST_KEY_STALE_MINUTES, s_stale_minutes);
         persist_write_int(PERSIST_KEY_HYPO_TREAT_THRESHOLD, s_hypo_treat_threshold);
-        persist_write_bool(PERSIST_KEY_HYPO_VIBRATE, s_hypo_vibrate);
+        persist_write_bool(PERSIST_KEY_HYPO_ALERT, s_hypo_alert);
         persist_write_bool(PERSIST_KEY_SHOW_MEALS, s_show_meals);
         persist_write_bool(PERSIST_KEY_SHOW_HYPO, s_show_hypo);
         persist_write_bool(PERSIST_KEY_SHOW_PREDICTION, s_show_prediction);
@@ -1678,10 +1677,10 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
         prv_layout_graph();
         send_capability_announcement(); // relay to the firmware right away, not on the next poll
         APP_LOG(APP_LOG_LEVEL_INFO,
-                "settings applied: alerts(low=%d other=%d) graph=%uh stale=%um hypo(thr=%u%% vibe=%d) "
+                "settings applied: alerts(low=%d other=%d) graph=%uh stale=%um hypo(thr=%u%% alert=%d) "
                 "show(meal=%d hypo=%d pred=%d trend=%d)",
                 s_alerts_low, s_alerts_other, s_graph_hours, s_stale_minutes, s_hypo_treat_threshold,
-                s_hypo_vibrate, s_show_meals, s_show_hypo, s_show_prediction, s_show_trend);
+                s_hypo_alert, s_show_meals, s_show_hypo, s_show_prediction, s_show_trend);
     }
 
     // BG and timestamp
@@ -1774,21 +1773,14 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
 
     // Hypo (treat-or-wait): like the trend arrow and prediction, sent with a BG push, and its
     // absence clears the last one -- the reading is no longer in the falling-low regime.
-    // Edge-triggered vibration (armed here, fired at the end of this function): buzz on crossing
-    // INTO the treat band, not on every push while it stays there, and not until the BG value and
-    // graph below have already been updated for this reading -- see s_hypo_alert_pending's comment.
     if (bg_tuple) {
         Tuple *hypo_tuple = dict_find(iter, KEY_HYPO_TREAT_PCT);
         Tuple *hypo_plow_tuple = dict_find(iter, KEY_HYPO_P_LOW_PCT);
         const bool new_valid = s_show_hypo && (hypo_tuple != NULL);
         const uint8_t new_pct = hypo_tuple ? hypo_tuple->value->uint8 : 0;
-        const bool was_above = prv_hypo_banner_shown();
         s_hypo_valid = new_valid;
         s_hypo_pct = new_pct;
-        const bool now_above = prv_hypo_banner_shown();
         s_hypo_p_low = hypo_plow_tuple ? hypo_plow_tuple->value->uint8 : 0;
-        if (now_above && !was_above)
-            s_hypo_alert_pending = true;
         if (s_status_layer)
             layer_mark_dirty(s_status_layer);
         prv_layout_graph(); // s_hypo_valid changed -> the graph's reclaimed bottom space may have too
@@ -1815,14 +1807,6 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
     update_ago_display();
     if (bg_tuple && s_graph_layer)
         layer_mark_dirty(s_graph_layer); // the first reading replaces the "No data" screen
-
-    // Fire last, now that the BG value/ago label/graph above are all current for this reading.
-    if (s_hypo_alert_pending) {
-        s_hypo_alert_pending = false;
-        if (s_hypo_vibrate) {
-            vibes_double_pulse();
-        }
-    }
 }
 
 static void inbox_dropped_callback(AppMessageResult reason, void *context) {
@@ -1848,7 +1832,8 @@ static void send_capability_announcement(void) {
     dict_write_uint32(iter, KEY_CAPABILITIES, caps);
     dict_write_uint8(iter, KEY_GRAPH_HOURS, s_graph_hours);
     dict_write_uint8(iter, KEY_SETTINGS_ALERTS, (s_alerts_low ? SETTINGS_ALERT_LOW : 0) |
-                                                   (s_alerts_other ? SETTINGS_ALERT_OTHER : 0));
+                                                   (s_alerts_other ? SETTINGS_ALERT_OTHER : 0) |
+                                                   (s_hypo_alert ? SETTINGS_ALERT_HYPO_MODEL : 0));
     // Not just CAP_HYPO above: this stops the sender computing the model at all, not just sending
     // it -- ShowHypo off should be a real "completely disabled", not just a hidden result.
     dict_write_uint8(iter, KEY_SETTINGS_FEATURES, s_show_hypo ? SETTINGS_FEATURE_HYPO : 0);
@@ -2085,8 +2070,8 @@ static void init(void) {
         s_stale_minutes = (uint8_t)persist_read_int(PERSIST_KEY_STALE_MINUTES);
     if (persist_exists(PERSIST_KEY_HYPO_TREAT_THRESHOLD))
         s_hypo_treat_threshold = (uint8_t)persist_read_int(PERSIST_KEY_HYPO_TREAT_THRESHOLD);
-    if (persist_exists(PERSIST_KEY_HYPO_VIBRATE))
-        s_hypo_vibrate = persist_read_bool(PERSIST_KEY_HYPO_VIBRATE);
+    if (persist_exists(PERSIST_KEY_HYPO_ALERT))
+        s_hypo_alert = persist_read_bool(PERSIST_KEY_HYPO_ALERT);
     if (persist_exists(PERSIST_KEY_SHOW_MEALS))
         s_show_meals = persist_read_bool(PERSIST_KEY_SHOW_MEALS);
     if (persist_exists(PERSIST_KEY_SHOW_HYPO))
