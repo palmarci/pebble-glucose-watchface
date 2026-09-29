@@ -1369,43 +1369,40 @@ static void draw_projection(GContext *ctx, GRect bounds) {
 // A fork mark at a meal's time along the top of the value band (above almost every reading), with
 // the carbs in grams beside it. Placed on the same time axis as the trace. The fork icon itself is
 // deliberately NOT placed generically -- it is the "this happened at this time" anchor, and moving
-// it to dodge a line would make it lie about when the meal was logged. Its label has no such
-// constraint, so it goes through prv_place_glyph: `row` still staggers it down a line when meals
-// land close enough in x to collide with each other (a separate concern from line collision), and
-// left-vs-right now also skips a side that the trace, the high/low lines or the forecast cross.
+// it to dodge a line would make it lie about when the meal was logged. Its label only picks a side.
 #define MEAL_ICON_H 11
 #define MEAL_TEXT_W 34
-#define MEAL_ROW_H 12
-static void draw_one_meal(GContext *ctx, GRect bounds, int x, uint16_t grams, int row) {
-    const int y = GRAPH_PAD_TOP + 1; // top of the band: the bottom is under the status strip
 
+static void draw_meal_fork(GContext *ctx, int x) {
+    const int y = GRAPH_PAD_TOP + 1; // top of the band: the bottom is under the status strip
     graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(COLOR_MEAL, COLOR_FG));
     graphics_fill_rect(ctx, GRect(x - 4, y, 2, 5), 0, GCornerNone);     // tines
     graphics_fill_rect(ctx, GRect(x - 1, y, 2, 5), 0, GCornerNone);
     graphics_fill_rect(ctx, GRect(x + 2, y, 2, 5), 0, GCornerNone);
     graphics_fill_rect(ctx, GRect(x - 4, y + 5, 8, 2), 0, GCornerNone); // base
     graphics_fill_rect(ctx, GRect(x - 1, y + 7, 2, 4), 0, GCornerNone); // handle
-    // The icon itself is fixed (see the comment above this function), but it still needs to be in
-    // the registry so a later glyph -- the peak label, most often -- knows to steer around it.
+    // The icon itself is fixed, but it still needs to be in the registry so a later glyph -- the
+    // peak label, most often -- knows to steer around it.
     prv_register_glyph(GRect(x - 4, y, 8, MEAL_ICON_H));
+}
 
-    char label[8];
-    snprintf(label, sizeof(label), "%u", (unsigned)grams);
-    const int label_y = y - 3 + row * MEAL_ROW_H;
-    const GRect candidates[] = {
-        GRect(x + 6, label_y, MEAL_TEXT_W, 16),               // right of the fork (preferred)
-        GRect(x - 6 - MEAL_TEXT_W, label_y, MEAL_TEXT_W, 16), // left of the fork
-    };
+// The grams label beside the fork at `x`, on the preferred side unless that side does not fit on
+// screen or (with `may_swap`) something crosses it and the other side is clear.
+static void draw_meal_label(GContext *ctx, GRect bounds, int x, const char *label, bool prefer_left,
+                            bool may_swap) {
+    const int label_y = GRAPH_PAD_TOP + 1 - 3;
+    const GRect right_box = GRect(x + 6, label_y, MEAL_TEXT_W, 16);
+    const GRect left_box = GRect(x - 6 - MEAL_TEXT_W, label_y, MEAL_TEXT_W, 16);
+    const GRect candidates[] = {prefer_left ? left_box : right_box, prefer_left ? right_box : left_box};
     const GRect clamp_area = GRect(0, 0, bounds.size.w, bounds.size.h);
     // The carb number must stay visually attached to its own fork, full stop -- prv_place_glyph's
     // usual clamp-then-pick can slide an edge-of-screen candidate away from its anchor and still
-    // call it "clean" (the clamped box just happens not to collide with anything, having been
-    // dragged somewhere unrelated to x). So: prefer whichever side needs no clamping at all, even
-    // if it collides with something else; only fall back to the generic (possibly detached)
-    // placement when neither raw side fits on screen, which real screen widths make unreachable.
+    // call it "clean". So: prefer whichever side needs no clamping at all, even if it collides with
+    // something else; only fall back to the generic (possibly detached) placement when neither raw
+    // side fits on screen, which real screen widths make unreachable.
     int chosen = -1;
     GRect box = candidates[0];
-    for (int i = 0; i < 2 && chosen < 0; i++) {
+    for (int i = 0; i < 2 && chosen < 0 && may_swap; i++) {
         if (prv_box_within(clamp_area, candidates[i]) && !prv_glyph_collides(bounds, candidates[i])) {
             box = candidates[i];
             chosen = i;
@@ -1418,38 +1415,70 @@ static void draw_one_meal(GContext *ctx, GRect bounds, int x, uint16_t grams, in
         }
     }
     if (chosen < 0) {
-        // Neither side fit on screen unclamped -- should not happen at any real screen width; log
-        // it if it ever does, since the label may now be detached from its own fork icon.
         APP_LOG(APP_LOG_LEVEL_WARNING, "meal label: fell back to clamped placement, x=%d", x);
         box = prv_place_glyph(bounds, clamp_area, candidates, 2, &chosen);
     }
-    const bool right = chosen == 0; // candidate 0 is "right of the fork" -- see prv_place_glyph
+    const bool left = (chosen == 0) == prefer_left;
     prv_register_glyph(box);
     graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(COLOR_MEAL, COLOR_FG));
     graphics_draw_text(ctx, label, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD), box,
-                       GTextOverflowModeTrailingEllipsis, right ? GTextAlignmentLeft : GTextAlignmentRight,
+                       GTextOverflowModeTrailingEllipsis, left ? GTextAlignmentRight : GTextAlignmentLeft,
                        NULL);
 }
 
 // Every meal still inside the graph window, oldest first (s_meal_ts is kept sorted by the parser).
-// Consecutive meals whose fork marks would land within one label's width stagger onto the next row
-// so their grams labels don't overlap.
+// Meals whose forks land closer than one label's width form a cluster, so no label ever sits
+// between two forks where it reads as belonging to either: a pair gets its labels on the outside
+// ("60 fork fork 24"), and three or more (or a pair too close to an edge for that) share one label
+// with their total beside the last fork.
 static void draw_meal(GContext *ctx, GRect bounds) {
     const uint32_t now = time(NULL);
     const int graph_minutes = s_graph_hours * 60;
     const int graph_w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
 
-    int prev_x = -1000;
-    int row = 0;
-    for (uint8_t i = 0; i < s_meal_count; i++) {
+    int xs[MEAL_LIST_MAX];
+    uint16_t grams[MEAL_LIST_MAX];
+    int n = 0;
+    for (uint8_t i = 0; i < s_meal_count && n < MEAL_LIST_MAX; i++) {
         const int age_min = now > s_meal_ts[i] ? (int)((now - s_meal_ts[i]) / 60) : 0;
         if (age_min > graph_minutes) {
             continue;
         }
-        const int x = graph_w - (age_min * graph_w) / graph_minutes;
-        row = (x - prev_x < MEAL_TEXT_W) ? row + 1 : 0;
-        draw_one_meal(ctx, bounds, x, s_meal_grams[i], row);
-        prev_x = x;
+        xs[n] = graph_w - (age_min * graph_w) / graph_minutes;
+        grams[n] = s_meal_grams[i];
+        n++;
+    }
+
+    char label[8];
+    for (int first = 0; first < n;) {
+        int last = first;
+        while (last + 1 < n && xs[last + 1] - xs[last] < MEAL_TEXT_W) {
+            last++;
+        }
+        for (int i = first; i <= last; i++) {
+            draw_meal_fork(ctx, xs[i]);
+        }
+        // A pair keeps its labels on the outside even when a line crosses one: a label between the
+        // two forks is worse. Too close to an edge for that, it gets the total instead.
+        const bool pair_fits = xs[first] - 6 - MEAL_TEXT_W >= 0 &&
+                               xs[last] + 6 + MEAL_TEXT_W <= bounds.size.w;
+        if (first == last) {
+            snprintf(label, sizeof(label), "%u", (unsigned)grams[first]);
+            draw_meal_label(ctx, bounds, xs[first], label, false, true);
+        } else if (last == first + 1 && pair_fits) {
+            snprintf(label, sizeof(label), "%u", (unsigned)grams[first]);
+            draw_meal_label(ctx, bounds, xs[first], label, true, false);
+            snprintf(label, sizeof(label), "%u", (unsigned)grams[last]);
+            draw_meal_label(ctx, bounds, xs[last], label, false, false);
+        } else {
+            unsigned total = 0;
+            for (int i = first; i <= last; i++) {
+                total += grams[i];
+            }
+            snprintf(label, sizeof(label), "%u", total);
+            draw_meal_label(ctx, bounds, xs[last], label, false, false);
+        }
+        first = last + 1;
     }
 }
 
