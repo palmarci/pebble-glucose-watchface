@@ -173,12 +173,7 @@ static int minutes_ago(void) {
 static bool is_stale(void) { return has_reading() && minutes_ago() >= STALE_MINUTES; }
 
 static void update_bg_display(void) {
-    // Stale -> blank the number rather than showing a value that hasn't updated in a while (a stale BG
-    // sat on screen for ~8 h during an overnight outage). The "ago" label still conveys how old it is.
-    // While fresh, show verbatim what the phone sent: "---" appears only when the phone sends it (the
-    // pump has no sensor value), so the watch never invents it -- every "---" mirrors the pump.
-    // Guard the layer: a data message can arrive before window_load creates it (the on-watch sender
-    // injects with zero latency, unlike a phone's), and text_layer_set_text(NULL,..) hard-faults.
+    // Guard in case data arrives before the layer is instantiated. Ditto throughout.
     if (s_bg_layer)
         text_layer_set_text(s_bg_layer, is_stale() ? "" : s_bg_string);
 }
