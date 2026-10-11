@@ -470,9 +470,7 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
 
 static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     update_time_and_date();
-    update_ago_display(); // advances the staleness hint each minute
-    // Re-run on the tick, not just on receipt: during an outage no message arrives, so this is what
-    // blanks the BG/IOB once they cross STALE_MINUTES.
+    update_ago_display();
     update_bg_display();
     update_iob_display();
 
@@ -480,11 +478,8 @@ static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
         update_status_display();
     }
 
-    // Redraw the graph too: point x-positions are computed from the current time, so without this the
-    // trace freezes between the 5-min pushes (doesn't creep left, old points don't fall off the edge).
-    // TODO: Consider if this is worth it, probably eats some battery
     if (s_graph_layer)
-        layer_mark_dirty(s_graph_layer); // trace scrolls and the projection goes stale together
+        layer_mark_dirty(s_graph_layer);
 }
 
 // Persist the current reading + graph so relaunching the watchface (e.g. after the menu) shows it
@@ -738,6 +733,7 @@ static void window_load(Window *window) {
 #endif
 
         s_ago_layer = make_text_layer(root, GRect(x, y, w, h), FONT_KEY_GOTHIC_24_BOLD, a);
+
         // add_debug_outline(GRect(x, y, w, h));
     }
 
@@ -755,6 +751,7 @@ static void window_load(Window *window) {
         const int y = PBL_DISPLAY_HEIGHT / 6;
 #endif
         s_iob_layer = make_text_layer(root, GRect(x, y, w, h), FONT_KEY_GOTHIC_24_BOLD, a);
+
         // add_debug_outline(GRect(x, y, w, h));
     }
 
@@ -824,9 +821,7 @@ static void window_unload(Window *window) {
 // does not relaunch the app, so without this a frame that arrived while the window was covered is
 // never replayed and the display sits stale until the next push. This is also the app's one
 // launch-time announce: load fires before the window is visible, appear right after.
-static void window_appear(Window *window) {
-    send_capability_announcement();
-}
+static void window_appear(Window *window) { send_capability_announcement(); }
 
 static void init(void) {
     load_state(); // restore last reading + graph so a relaunch renders immediately, not empty
@@ -838,7 +833,8 @@ static void init(void) {
     connection_service_subscribe((ConnectionHandlers){.pebble_app_connection_handler = bluetooth_callback});
 
     s_window = window_create();
-    window_set_window_handlers(s_window, (WindowHandlers){.load = window_load, .appear = window_appear, .unload = window_unload});
+    window_set_window_handlers(s_window,
+                               (WindowHandlers){.load = window_load, .appear = window_appear, .unload = window_unload});
     window_stack_push(s_window, true);
 }
 
