@@ -77,21 +77,11 @@
 #define PERSIST_GRAPH_HIGH 11
 #define PERSIST_GRAPH_LOW 12
 
-// Status strip: a full-width opaque white band hugging the status text, sitting low over the graph so
-// its uppercase letters land ~2px above the time. Custom-drawn (not a TextLayer background) so the
-// band can be full width yet vertically tight to the caps. Layer-local coords, like every other layer
-// here; it paints only the band + text, leaving the rest transparent so the graph shows through.
-#define STATUS_FONT FONT_KEY_GOTHIC_18_BOLD
-#define STATUS_TOP_Y 92        // layer top (screen y), which is also the text box's top
-#define STATUS_H 24            // one line of STATUS_FONT, with room for descenders
-#define STATUS_BAND_OFFSET_Y 4 // band top within the layer; the font's top padding drops the caps into it
-#define STATUS_BAND_H 17       // band height (caps + a little room)
-
 static Window *s_window;
 static TextLayer *s_bg_layer;
 static TextLayer *s_ago_layer;
 static TextLayer *s_iob_layer;
-static Layer *s_status_layer;
+static TextLayer *s_status_layer;
 static TextLayer *s_time_layer;
 static TextLayer *s_date_layer;
 static Layer *s_graph_layer; // axes, trace and projection all draw here
@@ -122,6 +112,7 @@ static char s_ago_display[16];
 static char s_iob_display[12];
 static char s_time_display[8];
 static char s_date_display[16];
+static char s_status_display[sizeof(s_status_string) + 6]; // status plus " hh:mm"
 
 static void safe_strncpy(char *dst, const char *src, size_t dst_size) {
     if (dst_size > 0) {
@@ -241,23 +232,9 @@ static void update_time_and_date(void) {
         text_layer_set_text(s_date_layer, s_date_display);
 }
 
-// The status label overlays the bottom of the graph as an opaque strip, but only when a status is
-// active; otherwise it's hidden so the full graph shows.
-static void update_status_display(void) {
-    if (s_status_layer)
-        layer_mark_dirty(s_status_layer);
-}
-
-// Paints only the band + text (when a status is active); everything else stays transparent so the
-// graph below shows through. All coords are layer-relative.
-static void status_layer_update_proc(Layer *layer, GContext *ctx) {
-    if (s_status_string[0] == '\0') {
+static void update_status_display() {
+    if (!s_status_layer)
         return;
-    }
-
-    const int16_t w = layer_get_bounds(layer).size.w;
-
-    char status_with_timer[sizeof(s_status_string) + 6]; // " hh:mm" is 6 chars
 
     bool show_timer = false;
     uint32_t hours = 0;
@@ -290,15 +267,13 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
 
     if (show_timer) {
         if (hours > 99)
-            hours = 99;  // Guarantee max 2 digits
-        snprintf(status_with_timer, sizeof(status_with_timer), "%s %lu:%02lu", s_status_string, hours, minutes);
+            hours = 99; // Guarantee max 2 digits
+        snprintf(s_status_display, sizeof(s_status_display), "%s %lu:%02lu", s_status_string, hours, minutes);
     } else {
-        snprintf(status_with_timer, sizeof(status_with_timer), "%s", s_status_string);
+        snprintf(s_status_display, sizeof(s_status_display), "%s", s_status_string);
     }
 
-    graphics_context_set_text_color(ctx, GColorBlack);
-    graphics_draw_text(ctx, status_with_timer, fonts_get_system_font(STATUS_FONT), GRect(0, 0, w, STATUS_H),
-                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+    text_layer_set_text(s_status_layer, s_status_display);
 }
 
 // Map a BG value (mg/dL / 2) to a y inside the graph layer, clamping to the fixed range. The only place
@@ -501,8 +476,9 @@ static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     update_bg_display();
     update_iob_display();
 
-    if (s_status_layer && (s_status_start != 0 || s_status_end != 0))
-        layer_mark_dirty(s_status_layer);
+    if (s_status_start != 0 || s_status_end != 0) {
+        update_status_display();
+    }
 
     // Redraw the graph too: point x-positions are computed from the current time, so without this the
     // trace freezes between the 5-min pushes (doesn't creep left, old points don't fall off the edge).
@@ -794,11 +770,12 @@ static void window_load(Window *window) {
 
     // --- Status --------------------------------------------------------------
     {
-        const int y = y_graph + GRAPH_LAYER_H - STATUS_H;
-        const int h = STATUS_H; // Todo tighten and unify
-        s_status_layer = make_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), status_layer_update_proc);
+        const int h = 24;
+        const int y = y_graph + GRAPH_LAYER_H - h;
+        s_status_layer =
+            make_text_layer(root, GRect(0, y, PBL_DISPLAY_WIDTH, h), FONT_KEY_GOTHIC_18_BOLD, GTextAlignmentCenter);
 
-        // add_debug_outline(GRect(0, STATUS_TOP_Y, PBL_DISPLAY_WIDTH, STATUS_H));
+        // add_debug_outline(GRect(0, y, PBL_DISPLAY_WIDTH, h));
     }
 
     // --- Date ----------------------------------------------------------------
@@ -836,7 +813,7 @@ static void window_unload(Window *window) {
     text_layer_destroy(s_bg_layer);
     text_layer_destroy(s_ago_layer);
     text_layer_destroy(s_iob_layer);
-    layer_destroy(s_status_layer);
+    text_layer_destroy(s_status_layer);
     text_layer_destroy(s_time_layer);
     text_layer_destroy(s_date_layer);
     layer_destroy(s_graph_layer);
