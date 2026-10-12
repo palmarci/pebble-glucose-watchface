@@ -195,6 +195,16 @@ static uint8_t s_hypo_p_low = 0;
 // reaches TREAT, and that notification's vibration is the one alert. This setting (Settings page,
 // HypoAlert) switches that notification on and off, relayed as SETTINGS_ALERT_HYPO_MODEL.
 static bool s_hypo_alert = true;
+// Whether that notification should ring through Quiet Time/Do Not Disturb instead of being
+// hidden/silenced like an ordinary one (Settings page, HypoDndBypass), relayed as
+// SETTINGS_ALERT_HYPO_DND_BYPASS. Meaningless if s_hypo_alert is off.
+static bool s_hypo_dnd_bypass = true;
+
+// IOB display (issue #31): the sender always sends both s_iob_string (pump's own bolus-only
+// figure) and s_iob_total_string (that plus the basal insulin the prediction model also tracks --
+// needed for the model, not how the pump displays it). This picks which one update_iob_display
+// shows; off by default so the watch matches what the pump itself is showing.
+static bool s_iob_include_basal = false;
 
 // The sender scores a falling reading from 6.0 mmol/L down, well before most of those turn into a
 // real low. Only a score at the treat threshold is worth screen space; below it, stay quiet.
@@ -221,6 +231,8 @@ static bool s_alerts_other = false;
 #define PERSIST_KEY_SHOW_HYPO 27
 #define PERSIST_KEY_SHOW_PREDICTION 28
 #define PERSIST_KEY_SHOW_TREND 29
+#define PERSIST_KEY_HYPO_DND_BYPASS 30
+#define PERSIST_KEY_IOB_INCLUDE_BASAL 31
 
 // Feature toggles: whether to ask the sender for this data at all (send_capability_announcement)
 // and show it if it arrives anyway (an in-flight push from before the toggle changed). All default
@@ -446,8 +458,12 @@ static void update_ago_display(void) {
 }
 
 static void update_iob_display(void) {
-    // The total (with basal) replaces the pump's bolus-only figure when the sender provides it.
-    const char *iob = s_iob_total_string[0] != '\0' ? s_iob_total_string : s_iob_string;
+    // s_iob_include_basal (Settings page, IobIncludeBasal) picks the pump's own bolus-only figure
+    // (default, matches the pump's own display) or the fuller total the prediction model tracks.
+    // Falls back to whichever one the sender actually provided if the preferred one is missing.
+    const char *iob = s_iob_include_basal
+                           ? (s_iob_total_string[0] != '\0' ? s_iob_total_string : s_iob_string)
+                           : (s_iob_string[0] != '\0' ? s_iob_string : s_iob_total_string);
     if (iob[0] == '\0' || is_stale()) {
         s_iob_display[0] = '\0';
     } else {
@@ -1653,19 +1669,24 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
     Tuple *stale_minutes_tuple = dict_find(iter, MESSAGE_KEY_StaleMinutes);
     Tuple *hypo_threshold_tuple = dict_find(iter, MESSAGE_KEY_HypoTreatThreshold);
     Tuple *hypo_alert_tuple = dict_find(iter, MESSAGE_KEY_HypoAlert);
+    Tuple *hypo_dnd_bypass_tuple = dict_find(iter, MESSAGE_KEY_HypoDndBypass);
+    Tuple *iob_include_basal_tuple = dict_find(iter, MESSAGE_KEY_IobIncludeBasal);
     Tuple *show_meals_tuple = dict_find(iter, MESSAGE_KEY_ShowMeals);
     Tuple *show_hypo_tuple = dict_find(iter, MESSAGE_KEY_ShowHypo);
     Tuple *show_prediction_tuple = dict_find(iter, MESSAGE_KEY_ShowPrediction);
     Tuple *show_trend_tuple = dict_find(iter, MESSAGE_KEY_ShowTrend);
     if (alerts_low_tuple || alerts_other_tuple || graph_hours_tuple || stale_minutes_tuple ||
-        hypo_threshold_tuple || hypo_alert_tuple || show_meals_tuple || show_hypo_tuple ||
-        show_prediction_tuple || show_trend_tuple) {
+        hypo_threshold_tuple || hypo_alert_tuple || hypo_dnd_bypass_tuple ||
+        iob_include_basal_tuple || show_meals_tuple || show_hypo_tuple || show_prediction_tuple ||
+        show_trend_tuple) {
         s_alerts_low = prv_tuple_bool(alerts_low_tuple, s_alerts_low);
         s_alerts_other = prv_tuple_bool(alerts_other_tuple, s_alerts_other);
         s_graph_hours = (uint8_t)prv_tuple_uint32(graph_hours_tuple, s_graph_hours);
         s_stale_minutes = (uint8_t)prv_tuple_uint32(stale_minutes_tuple, s_stale_minutes);
         s_hypo_treat_threshold = (uint8_t)prv_tuple_uint32(hypo_threshold_tuple, s_hypo_treat_threshold);
         s_hypo_alert = prv_tuple_bool(hypo_alert_tuple, s_hypo_alert);
+        s_hypo_dnd_bypass = prv_tuple_bool(hypo_dnd_bypass_tuple, s_hypo_dnd_bypass);
+        s_iob_include_basal = prv_tuple_bool(iob_include_basal_tuple, s_iob_include_basal);
         s_show_meals = prv_tuple_bool(show_meals_tuple, s_show_meals);
         s_show_hypo = prv_tuple_bool(show_hypo_tuple, s_show_hypo);
         s_show_prediction = prv_tuple_bool(show_prediction_tuple, s_show_prediction);
@@ -1677,6 +1698,8 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
         persist_write_int(PERSIST_KEY_STALE_MINUTES, s_stale_minutes);
         persist_write_int(PERSIST_KEY_HYPO_TREAT_THRESHOLD, s_hypo_treat_threshold);
         persist_write_bool(PERSIST_KEY_HYPO_ALERT, s_hypo_alert);
+        persist_write_bool(PERSIST_KEY_HYPO_DND_BYPASS, s_hypo_dnd_bypass);
+        persist_write_bool(PERSIST_KEY_IOB_INCLUDE_BASAL, s_iob_include_basal);
         persist_write_bool(PERSIST_KEY_SHOW_MEALS, s_show_meals);
         persist_write_bool(PERSIST_KEY_SHOW_HYPO, s_show_hypo);
         persist_write_bool(PERSIST_KEY_SHOW_PREDICTION, s_show_prediction);
@@ -1697,6 +1720,7 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
             s_trend_valid = false;
             update_trend_indicator();
         }
+        update_iob_display(); // apply the basal-inclusion toggle instantly, not on the next push
         if (s_graph_layer) {
             layer_mark_dirty(s_graph_layer);
         }
@@ -1706,10 +1730,11 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
         prv_layout_graph();
         send_capability_announcement(); // relay to the firmware right away, not on the next poll
         APP_LOG(APP_LOG_LEVEL_INFO,
-                "settings applied: alerts(low=%d other=%d) graph=%uh stale=%um hypo(thr=%u%% alert=%d) "
-                "show(meal=%d hypo=%d pred=%d trend=%d)",
-                s_alerts_low, s_alerts_other, s_graph_hours, s_stale_minutes, s_hypo_treat_threshold,
-                s_hypo_alert, s_show_meals, s_show_hypo, s_show_prediction, s_show_trend);
+                "settings applied: alerts(low=%d other=%d dnd_bypass=%d) graph=%uh stale=%um "
+                "hypo(thr=%u%% alert=%d) iob_basal=%d show(meal=%d hypo=%d pred=%d trend=%d)",
+                s_alerts_low, s_alerts_other, s_hypo_dnd_bypass, s_graph_hours, s_stale_minutes,
+                s_hypo_treat_threshold, s_hypo_alert, s_iob_include_basal, s_show_meals, s_show_hypo,
+                s_show_prediction, s_show_trend);
     }
 
     // BG and timestamp
@@ -1862,7 +1887,8 @@ static void send_capability_announcement(void) {
     dict_write_uint8(iter, KEY_GRAPH_HOURS, s_graph_hours);
     dict_write_uint8(iter, KEY_SETTINGS_ALERTS, (s_alerts_low ? SETTINGS_ALERT_LOW : 0) |
                                                    (s_alerts_other ? SETTINGS_ALERT_OTHER : 0) |
-                                                   (s_hypo_alert ? SETTINGS_ALERT_HYPO_MODEL : 0));
+                                                   (s_hypo_alert ? SETTINGS_ALERT_HYPO_MODEL : 0) |
+                                                   (s_hypo_dnd_bypass ? SETTINGS_ALERT_HYPO_DND_BYPASS : 0));
     // Not just CAP_HYPO above: this stops the sender computing the model at all, not just sending
     // it -- ShowHypo off should be a real "completely disabled", not just a hidden result.
     dict_write_uint8(iter, KEY_SETTINGS_FEATURES, s_show_hypo ? SETTINGS_FEATURE_HYPO : 0);
@@ -2101,6 +2127,10 @@ static void init(void) {
         s_hypo_treat_threshold = (uint8_t)persist_read_int(PERSIST_KEY_HYPO_TREAT_THRESHOLD);
     if (persist_exists(PERSIST_KEY_HYPO_ALERT))
         s_hypo_alert = persist_read_bool(PERSIST_KEY_HYPO_ALERT);
+    if (persist_exists(PERSIST_KEY_HYPO_DND_BYPASS))
+        s_hypo_dnd_bypass = persist_read_bool(PERSIST_KEY_HYPO_DND_BYPASS);
+    if (persist_exists(PERSIST_KEY_IOB_INCLUDE_BASAL))
+        s_iob_include_basal = persist_read_bool(PERSIST_KEY_IOB_INCLUDE_BASAL);
     if (persist_exists(PERSIST_KEY_SHOW_MEALS))
         s_show_meals = persist_read_bool(PERSIST_KEY_SHOW_MEALS);
     if (persist_exists(PERSIST_KEY_SHOW_HYPO))

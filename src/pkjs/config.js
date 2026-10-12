@@ -27,6 +27,18 @@ module.exports = [
   },
   {
     "type": "heading",
+    "defaultValue": "IOB display"
+  },
+  {
+    "type": "toggle",
+    "messageKey": "IobIncludeBasal",
+    "label": "Include basal",
+    "description": "Off (default): the IOB number matches what the pump itself shows -- bolus insulin only. " +
+      "On: adds the basal insulin the prediction model also tracks, for a fuller total the pump's own display doesn't include.",
+    "defaultValue": false
+  },
+  {
+    "type": "heading",
     "defaultValue": "Graph"
   },
   {
@@ -73,6 +85,14 @@ module.exports = [
     "messageKey": "HypoAlert",
     "label": "Alert on TREAT",
     "description": "Pop up a notification, with vibration, when the hypo model says to treat: its treat score, low chance, lowest BG in the next hour and the current BG. Off: the TREAT band only.",
+    "defaultValue": true
+  },
+  {
+    "type": "toggle",
+    "messageKey": "HypoDndBypass",
+    "label": "Ring through Quiet Time",
+    "description": "Let the TREAT alert above through Quiet Time/Do Not Disturb -- vibrate and show even if " +
+      "notifications are muted or hidden overnight. Off if you'd rather not be woken for it.",
     "defaultValue": true
   },
   {
