@@ -478,8 +478,8 @@ static void update_iob_display(void) {
 // An X while the pump link is not ready, nothing once it is: ready is the normal state, and a
 // "connected" dot was hard to tell from the X at a glance. The link can be ready while no CGM
 // readings arrive (sensor warm-up, sensor-pump dropout), so the X is what separates that from a
-// pump outage. Red for no link; orange (a thin X on B&W) for a link that hasn't finished the pump's
-// handshake and so delivers no data yet.
+// pump outage. Red for no link; orange for a link that hasn't finished the pump's handshake and so
+// delivers no data yet, a ring instead of the X on B&W, which has no orange.
 static void pump_layer_update_proc(Layer *layer, GContext *ctx) {
     if (s_pump_link_state == PUMP_LINK_READY) {
         return;
@@ -489,10 +489,18 @@ static void pump_layer_update_proc(Layer *layer, GContext *ctx) {
     const int16_t r = 6;
     const bool link_up = s_pump_link_state == PUMP_LINK_UP;
 
+#ifndef PBL_COLOR
+    if (link_up) {
+        graphics_context_set_stroke_color(ctx, COLOR_FG);
+        graphics_context_set_stroke_width(ctx, 2);
+        graphics_draw_circle(ctx, center, r);
+        return;
+    }
+#endif
     // Red/orange would render black on B&W platforms, invisible on the black background.
     graphics_context_set_stroke_color(
         ctx, PBL_IF_COLOR_ELSE(link_up ? COLOR_PUMP_LINK_UP : COLOR_PUMP_OFFLINE, COLOR_FG));
-    graphics_context_set_stroke_width(ctx, PBL_IF_COLOR_ELSE(3, link_up ? 1 : 3));
+    graphics_context_set_stroke_width(ctx, 3);
     graphics_draw_line(ctx, GPoint(center.x - r, center.y - r), GPoint(center.x + r, center.y + r));
     graphics_draw_line(ctx, GPoint(center.x - r, center.y + r), GPoint(center.x + r, center.y - r));
 }
