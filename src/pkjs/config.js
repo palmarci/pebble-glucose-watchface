@@ -112,6 +112,13 @@ module.exports = [
   },
   {
     "type": "toggle",
+    "messageKey": "ShowBgEntries",
+    "label": "Fingerstick BGs",
+    "description": "A drop on the graph for each blood glucose entered on the pump.",
+    "defaultValue": true
+  },
+  {
+    "type": "toggle",
     "messageKey": "ShowHypo",
     "label": "Hypo model",
     "description": "Run the model at all: the TREAT band below the graph and the alert above. Off skips it on the watch entirely.",

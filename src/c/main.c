@@ -23,6 +23,7 @@
 #define COLOR_PUMP_OFFLINE GColorRed   // the pump-offline cross
 #define COLOR_PUMP_LINK_UP GColorOrange // the same cross while the link is up but not ready
 #define COLOR_MEAL      GColorVividCerulean // the meal fork (white on B&W)
+#define COLOR_BG_ENTRY  GColorRed      // the fingerstick drop (white on B&W)
 
 // Graph config
 // Hours of graph data. Phone-configurable (Settings page, GraphHours) since MINIMED_GRAPH_MAX_HOURS
@@ -234,6 +235,7 @@ static bool s_alerts_other = false;
 #define PERSIST_KEY_SHOW_TREND 29
 #define PERSIST_KEY_HYPO_DND_BYPASS 30
 #define PERSIST_KEY_IOB_INCLUDE_BASAL 31
+#define PERSIST_KEY_SHOW_BG_ENTRIES 32
 
 // Feature toggles: whether to ask the sender for this data at all (send_capability_announcement)
 // and show it if it arrives anyway (an in-flight push from before the toggle changed). All default
@@ -242,11 +244,19 @@ static bool s_show_meals = true;
 static bool s_show_hypo = true;
 static bool s_show_prediction = true;
 static bool s_show_trend = true;
+static bool s_show_bg_entries = true;
 
 #define MEAL_LIST_MAX 8
 static uint8_t s_meal_count = 0;
 static uint32_t s_meal_ts[MEAL_LIST_MAX];
 static uint16_t s_meal_grams[MEAL_LIST_MAX];
+
+// Fingerstick BGs entered on the pump (KEY_BG_ENTRY_LIST): a drop on the graph at each one's time
+// and value, for as long as that time is inside the graph window.
+#define BG_ENTRY_LIST_MAX 8
+static uint8_t s_bg_entry_count = 0;
+static uint32_t s_bg_entry_ts[BG_ENTRY_LIST_MAX];
+static uint16_t s_bg_entry_mgdl[BG_ENTRY_LIST_MAX];
 
 static bool s_trend_valid = false;
 static uint8_t s_trend_arrow = TREND_UNKNOWN;
@@ -987,7 +997,7 @@ static bool prv_box_crosses_segment(GRect box, GPoint a, GPoint b) {
 // top of each other, since neither is a "line" the trace/hline/projection checks above catch.
 // Reset once per redraw (prv_reset_glyph_registry, called from graph_layer_update_proc) and
 // appended to by prv_register_glyph after each marker's final position is chosen.
-#define GLYPH_REGISTRY_MAX 20 // MEAL_LIST_MAX (8) meals x 2 boxes (fork + label) + the peak label, with room
+#define GLYPH_REGISTRY_MAX 28 // MEAL_LIST_MAX (8) meals x 2 boxes (fork + label) + BG_ENTRY_LIST_MAX (8) drops + the peak label, with room
 static GRect s_glyph_registry[GLYPH_REGISTRY_MAX];
 static int s_glyph_registry_count;
 
@@ -1519,6 +1529,34 @@ static void draw_no_data(GContext *ctx, GRect bounds) {
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
+// A drop at each fingerstick BG's time and value, like the pump draws them. The value is where it
+// sits on the y axis, so no number beside it.
+static void draw_bg_entries(GContext *ctx, GRect bounds) {
+    const uint32_t now = time(NULL);
+    const int graph_minutes = s_graph_hours * 60;
+    const int graph_w = bounds.size.w * GRAPH_WIDTH_NUM / GRAPH_WIDTH_DEN;
+    const GColor color = PBL_IF_COLOR_ELSE(COLOR_BG_ENTRY, COLOR_FG);
+    graphics_context_set_fill_color(ctx, color);
+    graphics_context_set_stroke_color(ctx, color);
+    graphics_context_set_stroke_width(ctx, 1);
+    for (uint8_t i = 0; i < s_bg_entry_count; i++) {
+        const int age_min = now > s_bg_entry_ts[i] ? (int)((now - s_bg_entry_ts[i]) / 60) : 0;
+        if (age_min > graph_minutes) {
+            continue;
+        }
+        const int x = graph_w - (age_min * graph_w) / graph_minutes;
+        const uint16_t wire = s_bg_entry_mgdl[i] / 2; // graph values are mg/dL / 2
+        const int y = graph_y(wire > 255 ? 255 : wire);
+        // A round bottom centred on the value and a point above it.
+        graphics_fill_circle(ctx, GPoint(x, y), 3);
+        graphics_draw_line(ctx, GPoint(x, y - 6), GPoint(x - 3, y - 1));
+        graphics_draw_line(ctx, GPoint(x, y - 6), GPoint(x + 3, y - 1));
+        graphics_draw_line(ctx, GPoint(x, y - 6), GPoint(x, y - 1));
+        graphics_draw_line(ctx, GPoint(x - 1, y - 4), GPoint(x + 1, y - 4));
+        prv_register_glyph(GRect(x - 3, y - 6, 7, 10));
+    }
+}
+
 // Axes behind the trace, projection on top of both.
 static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     const GRect bounds = layer_get_bounds(layer);
@@ -1544,6 +1582,8 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     draw_bg_graph(ctx, bounds);
     if (s_show_meals)
         draw_meal(ctx, bounds); // placed before the peak label so it registers its boxes first
+    if (s_show_bg_entries)
+        draw_bg_entries(ctx, bounds); // likewise
     // draw_projection falls back to extrapolating the trace's own recent trend when there's no
     // KEY_PREDICTED_BG -- gate the call itself, not just s_pred_valid, so the toggle hides both.
     if (s_show_prediction)
@@ -1638,6 +1678,27 @@ static bool parse_meal_list_blob(const uint8_t *d, uint16_t len) {
     return true;
 }
 
+// Fingerstick list wire format: [count u8][(timestamp u32 LE)(mg/dL u16 LE) x count], the meal
+// list's layout. Same validate-before-write discipline.
+static bool parse_bg_entry_list_blob(const uint8_t *d, uint16_t len) {
+    if (len < 1) {
+        return false;
+    }
+    uint8_t count = d[0];
+    if (count > BG_ENTRY_LIST_MAX)
+        count = BG_ENTRY_LIST_MAX;
+    if (len < (uint16_t)(1 + count * 6)) {
+        return false;
+    }
+    for (uint8_t i = 0; i < count; i++) {
+        const uint8_t *p = d + 1 + i * 6;
+        s_bg_entry_ts[i] = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+        s_bg_entry_mgdl[i] = (uint16_t)(p[4] | (p[5] << 8));
+    }
+    s_bg_entry_count = count;
+    return true;
+}
+
 // Clay's toggle wire type isn't pinned down by messageKeys (unlike the shared protocol.h keys,
 // which spell out an exact width) -- read whatever width/signedness it used rather than assuming.
 static bool prv_tuple_bool(const Tuple *t, bool fallback) {
@@ -1688,10 +1749,11 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
     Tuple *show_hypo_tuple = dict_find(iter, MESSAGE_KEY_ShowHypo);
     Tuple *show_prediction_tuple = dict_find(iter, MESSAGE_KEY_ShowPrediction);
     Tuple *show_trend_tuple = dict_find(iter, MESSAGE_KEY_ShowTrend);
+    Tuple *show_bg_entries_tuple = dict_find(iter, MESSAGE_KEY_ShowBgEntries);
     if (alerts_low_tuple || alerts_other_tuple || graph_hours_tuple || stale_minutes_tuple ||
         hypo_threshold_tuple || hypo_alert_tuple || hypo_dnd_bypass_tuple ||
         iob_include_basal_tuple || show_meals_tuple || show_hypo_tuple || show_prediction_tuple ||
-        show_trend_tuple) {
+        show_trend_tuple || show_bg_entries_tuple) {
         s_alerts_low = prv_tuple_bool(alerts_low_tuple, s_alerts_low);
         s_alerts_other = prv_tuple_bool(alerts_other_tuple, s_alerts_other);
         s_graph_hours = (uint8_t)prv_tuple_uint32(graph_hours_tuple, s_graph_hours);
@@ -1704,6 +1766,7 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
         s_show_hypo = prv_tuple_bool(show_hypo_tuple, s_show_hypo);
         s_show_prediction = prv_tuple_bool(show_prediction_tuple, s_show_prediction);
         s_show_trend = prv_tuple_bool(show_trend_tuple, s_show_trend);
+        s_show_bg_entries = prv_tuple_bool(show_bg_entries_tuple, s_show_bg_entries);
 
         persist_write_bool(PERSIST_KEY_ALERTS_LOW, s_alerts_low);
         persist_write_bool(PERSIST_KEY_ALERTS_OTHER, s_alerts_other);
@@ -1717,11 +1780,15 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
         persist_write_bool(PERSIST_KEY_SHOW_HYPO, s_show_hypo);
         persist_write_bool(PERSIST_KEY_SHOW_PREDICTION, s_show_prediction);
         persist_write_bool(PERSIST_KEY_SHOW_TREND, s_show_trend);
+        persist_write_bool(PERSIST_KEY_SHOW_BG_ENTRIES, s_show_bg_entries);
 
         // Apply disabled features immediately, rather than waiting for the sender to notice its
         // announced capabilities shrank and stop pushing them -- a toggle should look instant.
         if (!s_show_meals) {
             s_meal_count = 0;
+        }
+        if (!s_show_bg_entries) {
+            s_bg_entry_count = 0;
         }
         if (!s_show_hypo) {
             s_hypo_valid = false;
@@ -1744,10 +1811,10 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
         send_capability_announcement(); // relay to the firmware right away, not on the next poll
         APP_LOG(APP_LOG_LEVEL_INFO,
                 "settings applied: alerts(low=%d other=%d dnd_bypass=%d) graph=%uh stale=%um "
-                "hypo(thr=%u%% alert=%d) iob_basal=%d show(meal=%d hypo=%d pred=%d trend=%d)",
+                "hypo(thr=%u%% alert=%d) iob_basal=%d show(meal=%d hypo=%d pred=%d trend=%d bg=%d)",
                 s_alerts_low, s_alerts_other, s_hypo_dnd_bypass, s_graph_hours, s_stale_minutes,
                 s_hypo_treat_threshold, s_hypo_alert, s_iob_include_basal, s_show_meals, s_show_hypo,
-                s_show_prediction, s_show_trend);
+                s_show_prediction, s_show_trend, s_show_bg_entries);
     }
 
     // BG and timestamp
@@ -1844,6 +1911,16 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
         }
     }
 
+    // Fingerstick BGs: like the meal list, the sender keeps sending until a change, so absence
+    // here means no change.
+    if (s_show_bg_entries) {
+        Tuple *bg_entry_tuple = dict_find(iter, KEY_BG_ENTRY_LIST);
+        if (bg_entry_tuple && parse_bg_entry_list_blob(bg_entry_tuple->value->data, bg_entry_tuple->length)) {
+            if (s_graph_layer)
+                layer_mark_dirty(s_graph_layer);
+        }
+    }
+
     // Hypo (treat-or-wait): like the trend arrow and prediction, sent with a BG push, and its
     // absence clears the last one -- the reading is no longer in the falling-low regime.
     if (bg_tuple) {
@@ -1900,6 +1977,7 @@ static void send_capability_announcement(void) {
         CAP_BG | CAP_IOB | CAP_STATUS | CAP_PUMP_CONNECTED | CAP_PUMP_LINK_STATE | CAP_IOB_TOTAL;
     if (s_show_trend) caps |= CAP_TREND_ARROW;
     if (s_show_meals) caps |= CAP_MEAL | CAP_MEAL_LIST;
+    if (s_show_bg_entries) caps |= CAP_BG_ENTRIES;
     if (s_show_prediction) caps |= CAP_PREDICTION;
     if (s_show_hypo) caps |= CAP_HYPO;
     dict_write_uint8(iter, KEY_PROTOCOL_VERSION, PROTOCOL_VERSION);
@@ -2153,6 +2231,8 @@ static void init(void) {
         s_iob_include_basal = persist_read_bool(PERSIST_KEY_IOB_INCLUDE_BASAL);
     if (persist_exists(PERSIST_KEY_SHOW_MEALS))
         s_show_meals = persist_read_bool(PERSIST_KEY_SHOW_MEALS);
+    if (persist_exists(PERSIST_KEY_SHOW_BG_ENTRIES))
+        s_show_bg_entries = persist_read_bool(PERSIST_KEY_SHOW_BG_ENTRIES);
     if (persist_exists(PERSIST_KEY_SHOW_HYPO))
         s_show_hypo = persist_read_bool(PERSIST_KEY_SHOW_HYPO);
     if (persist_exists(PERSIST_KEY_SHOW_PREDICTION))
