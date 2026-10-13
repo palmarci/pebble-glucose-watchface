@@ -21,7 +21,7 @@
 #define COLOR_BG_OK     GColorGreen    // within range
 #define COLOR_BG_HIGH   GColorYellow   // above the high line
 #define COLOR_PUMP_OFFLINE GColorRed   // the pump-offline cross
-#define COLOR_PUMP_LINK_UP GColorOrange // the same cross while the link is up but not ready
+#define COLOR_PUMP_LINK_UP GColorYellow // the same cross while the link is up but not ready
 #define COLOR_MEAL      GColorVividCerulean // the meal fork (white on B&W)
 #define COLOR_BG_ENTRY  GColorRed      // the fingerstick drop (white on B&W)
 
@@ -488,8 +488,9 @@ static void update_iob_display(void) {
 // An X while the pump link is not ready, nothing once it is: ready is the normal state, and a
 // "connected" dot was hard to tell from the X at a glance. The link can be ready while no CGM
 // readings arrive (sensor warm-up, sensor-pump dropout), so the X is what separates that from a
-// pump outage. Red for no link; orange for a link that hasn't finished the pump's handshake and so
-// delivers no data yet, a ring instead of the X on B&W, which has no orange.
+// pump outage. Red for no link; yellow for a link that hasn't finished the pump's handshake and so
+// delivers no data yet (orange was too dim on the display), a ring instead of the X on B&W, which
+// has no yellow.
 static void pump_layer_update_proc(Layer *layer, GContext *ctx) {
     if (s_pump_link_state == PUMP_LINK_READY) {
         return;
