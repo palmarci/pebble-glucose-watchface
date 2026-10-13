@@ -21,6 +21,7 @@
 #define COLOR_BG_OK     GColorGreen    // within range
 #define COLOR_BG_HIGH   GColorYellow   // above the high line
 #define COLOR_PUMP_OFFLINE GColorRed   // the pump-offline cross
+#define COLOR_PUMP_LINK_UP GColorOrange // the same cross while the link is up but not ready
 #define COLOR_MEAL      GColorVividCerulean // the meal fork (white on B&W)
 
 // Graph config
@@ -159,10 +160,10 @@ static char s_status_string[20] = ""; // pump status, e.g. "SUSPENDED"; empty = 
 static uint32_t s_status_start = 0;
 static uint32_t s_status_end = 0;
 
-// Pump link state (KEY_PUMP_CONNECTED). Offline is the correct default until the sender says
-// otherwise -- not "unknown" -- so a relaunch shows the cross rather than carrying a stale
-// "connected" from before.
-static bool s_pump_connected = false;
+// Pump link state (PUMP_LINK_*, from KEY_PUMP_LINK_STATE, or KEY_PUMP_CONNECTED from a sender that
+// only knows that one). Offline is the correct default until the sender says otherwise -- not
+// "unknown" -- so a relaunch shows the cross rather than carrying a stale "connected" from before.
+static uint8_t s_pump_link_state = PUMP_LINK_OFFLINE;
 
 // Pump-provided trend arrow (KEY_TREND_ARROW). Distinct from the on-watch trend PROJECTION drawn on
 // the graph above (issue #1, extrapolated locally) -- this one comes straight from the pump's own
@@ -474,20 +475,24 @@ static void update_iob_display(void) {
         text_layer_set_text(s_iob_layer, s_iob_display);
 }
 
-// An X while the pump link is down, nothing while it's up: connected is the normal state, and a
-// "connected" dot was hard to tell from the X at a glance. The link can be up while no CGM readings
-// arrive (sensor warm-up, sensor-pump dropout), so the X is what separates that from a pump outage.
+// An X while the pump link is not ready, nothing once it is: ready is the normal state, and a
+// "connected" dot was hard to tell from the X at a glance. The link can be ready while no CGM
+// readings arrive (sensor warm-up, sensor-pump dropout), so the X is what separates that from a
+// pump outage. Red for no link; orange (a thin X on B&W) for a link that hasn't finished the pump's
+// handshake and so delivers no data yet.
 static void pump_layer_update_proc(Layer *layer, GContext *ctx) {
-    if (s_pump_connected) {
+    if (s_pump_link_state == PUMP_LINK_READY) {
         return;
     }
     const GRect bounds = layer_get_bounds(layer);
     const GPoint center = GPoint(bounds.size.w / 2, bounds.size.h / 2);
     const int16_t r = 6;
+    const bool link_up = s_pump_link_state == PUMP_LINK_UP;
 
-    // Red would render black on B&W platforms, invisible on the black background.
-    graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(COLOR_PUMP_OFFLINE, COLOR_FG));
-    graphics_context_set_stroke_width(ctx, 3);
+    // Red/orange would render black on B&W platforms, invisible on the black background.
+    graphics_context_set_stroke_color(
+        ctx, PBL_IF_COLOR_ELSE(link_up ? COLOR_PUMP_LINK_UP : COLOR_PUMP_OFFLINE, COLOR_FG));
+    graphics_context_set_stroke_width(ctx, PBL_IF_COLOR_ELSE(3, link_up ? 1 : 3));
     graphics_draw_line(ctx, GPoint(center.x - r, center.y - r), GPoint(center.x + r, center.y + r));
     graphics_draw_line(ctx, GPoint(center.x - r, center.y + r), GPoint(center.x + r, center.y - r));
 }
@@ -1511,7 +1516,7 @@ static void graph_layer_update_proc(Layer *layer, GContext *ctx) {
     const GRect bounds = layer_get_bounds(layer);
     update_axis_max();
     prv_reset_glyph_registry(); // a fresh frame: forget last redraw's glyph boxes
-    if (!s_pump_connected && s_pump_layer) {
+    if (s_pump_link_state != PUMP_LINK_READY && s_pump_layer) {
         // The pump-offline cross lives in its own layer, outside the graph, but still shares the
         // same screen region near the graph's top-left corner and can visually collide with a
         // glyph placed there (confirmed: the peak label, when the peak is near the left edge of the
@@ -1780,10 +1785,16 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
         update_status_display();
     }
 
-    // Pump connection
+    // Pump connection. A sender that knows KEY_PUMP_LINK_STATE sends it next to KEY_PUMP_CONNECTED;
+    // an older one only sends KEY_PUMP_CONNECTED, which can't tell "link up" from "ready".
+    Tuple *link_tuple = dict_find(iter, KEY_PUMP_LINK_STATE);
     Tuple *pump_tuple = dict_find(iter, KEY_PUMP_CONNECTED);
-    if (pump_tuple) {
-        s_pump_connected = pump_tuple->value->uint8 != 0;
+    if (link_tuple) {
+        const uint8_t state = link_tuple->value->uint8;
+        s_pump_link_state = state > PUMP_LINK_READY ? PUMP_LINK_READY : state;
+        update_pump_indicator();
+    } else if (pump_tuple) {
+        s_pump_link_state = pump_tuple->value->uint8 != 0 ? PUMP_LINK_READY : PUMP_LINK_OFFLINE;
         update_pump_indicator();
     }
 
@@ -1877,7 +1888,8 @@ static void send_capability_announcement(void) {
     }
     // Disabled features (Settings page) drop their capability bits too, not just the local draw --
     // no point asking the sender for data nobody will show; it also saves it the work.
-    uint32_t caps = CAP_BG | CAP_IOB | CAP_STATUS | CAP_PUMP_CONNECTED | CAP_IOB_TOTAL;
+    uint32_t caps =
+        CAP_BG | CAP_IOB | CAP_STATUS | CAP_PUMP_CONNECTED | CAP_PUMP_LINK_STATE | CAP_IOB_TOTAL;
     if (s_show_trend) caps |= CAP_TREND_ARROW;
     if (s_show_meals) caps |= CAP_MEAL | CAP_MEAL_LIST;
     if (s_show_prediction) caps |= CAP_PREDICTION;
