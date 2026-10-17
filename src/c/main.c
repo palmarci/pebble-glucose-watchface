@@ -273,6 +273,7 @@ static char s_ago_display[16];
 static char s_iob_display[12];
 static char s_time_display[8];
 static char s_date_display[16];
+static char s_status_display[sizeof(s_status_string) + 6]; // status plus " hh:mm"
 
 static void safe_strncpy(char *dst, const char *src, size_t dst_size) {
     if (dst_size > 0) {
@@ -646,8 +647,6 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
         return;
     }
 
-    char status_with_timer[sizeof(s_status_string) + 6]; // " hh:mm" is 6 chars
-
     bool show_timer = false;
     uint32_t hours = 0;
     uint32_t minutes = 0;
@@ -679,14 +678,14 @@ static void status_layer_update_proc(Layer *layer, GContext *ctx) {
 
     if (show_timer) {
         if (hours > 99)
-            hours = 99;  // Guarantee max 2 digits
-        snprintf(status_with_timer, sizeof(status_with_timer), "%s %lu:%02lu", s_status_string, hours, minutes);
+            hours = 99; // Guarantee max 2 digits
+        snprintf(s_status_display, sizeof(s_status_display), "%s %lu:%02lu", s_status_string, hours, minutes);
     } else {
-        snprintf(status_with_timer, sizeof(status_with_timer), "%s", s_status_string);
+        snprintf(s_status_display, sizeof(s_status_display), "%s", s_status_string);
     }
 
     graphics_context_set_text_color(ctx, COLOR_FG);
-    graphics_draw_text(ctx, status_with_timer, fonts_get_system_font(STATUS_FONT), GRect(0, 0, w, STATUS_H),
+    graphics_draw_text(ctx, s_status_display, fonts_get_system_font(STATUS_FONT), GRect(0, 0, w, STATUS_H),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
@@ -1624,11 +1623,8 @@ static void tick_callback(struct tm *tick_time, TimeUnits units_changed) {
     if (s_status_layer && (s_status_start != 0 || s_status_end != 0))
         layer_mark_dirty(s_status_layer);
 
-    // Redraw the graph too: point x-positions are computed from the current time, so without this the
-    // trace freezes between the 5-min pushes (doesn't creep left, old points don't fall off the edge).
-    // TODO: Consider if this is worth it, probably eats some battery
     if (s_graph_layer)
-        layer_mark_dirty(s_graph_layer); // trace scrolls and the projection goes stale together
+        layer_mark_dirty(s_graph_layer);
 }
 
 // Graph wire format: [ref_ts u32 LE][count u16 LE][offset_min u16 LE ×n][bg u8 ×n]. Returns false and
@@ -1952,8 +1948,8 @@ static void handle_dictionary(DictionaryIterator *iter, void *context) {
     if ((high_tuple || low_tuple) && s_graph_layer)
         layer_mark_dirty(s_graph_layer);
 
-    APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s (ts=%lu) IOB: %s graph=%d", s_bg_string, s_bg_timestamp, s_iob_string,
-            s_graph_count);
+    APP_LOG(APP_LOG_LEVEL_INFO, "Received BG: %s (ts=%lu now=%lu) IOB: %s graph=%d", s_bg_string,
+            (unsigned long)s_bg_timestamp, (unsigned long)time(NULL), s_iob_string, s_graph_count);
     update_bg_display();
     update_ago_display();
     if (bg_tuple && s_graph_layer)
@@ -2206,6 +2202,12 @@ static void window_unload(Window *window) {
     layer_destroy(s_debug_layer);
 }
 
+// Re-announce whenever the window becomes visible again. Returning from a notification or a menu
+// does not relaunch the app, so without this a frame that arrived while the window was covered is
+// never replayed and the display sits stale until the next push. This is also the app's one
+// launch-time announce: load fires before the window is visible, appear right after.
+static void window_appear(Window *window) { send_capability_announcement(); }
+
 static void init(void) {
     // Nothing is stored across launches or reboots: the sender re-sends its whole state when the
     // watchface announces itself, and until then the screen says so rather than showing old data.
@@ -2249,10 +2251,9 @@ static void init(void) {
     connection_service_subscribe((ConnectionHandlers){.pebble_app_connection_handler = bluetooth_callback});
 
     s_window = window_create();
-    window_set_window_handlers(s_window, (WindowHandlers){.load = window_load, .unload = window_unload});
+    window_set_window_handlers(s_window,
+                               (WindowHandlers){.load = window_load, .appear = window_appear, .unload = window_unload});
     window_stack_push(s_window, true);
-
-    send_capability_announcement();
 }
 
 static void deinit(void) {
